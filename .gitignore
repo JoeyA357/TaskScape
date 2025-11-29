@@ -1,0 +1,60 @@
+# ======================
+# Python
+# ======================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+
+# ======================
+# Virtual Environment
+# ======================
+venv/
+env/
+.venv/
+
+# ======================
+# Streamlit
+# ======================
+.streamlit/
+
+# ======================
+# Project Artifacts
+# ======================
+uploads/
+data/
+chroma/
+chroma_db/
+vectorstore/
+*.db
+*.jsonl
+
+# ======================
+# OS / IDE
+# ======================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ======================
+# Secrets / Environment
+# ======================
+.env
+.env.*
+*.key
+
+# ======================
+# RAG Files
+# ======================
+*.pdf
+*.docx
+*.txt
+raw_docs/
+
+# ======================
+# Cache
+# ======================
+.cache/

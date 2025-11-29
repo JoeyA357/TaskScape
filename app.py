@@ -2,12 +2,15 @@ import datetime
 from typing import List, Dict, Any
 
 import streamlit as st
+from dotenv import load_dotenv
+load_dotenv() # to load key 
+
 
 # Optional: once teammates create these files, you can uncomment the imports.
 # For now, we keep them commented so the UI runs with placeholders.
 
 # from scheduler_module import build_schedule          # SCHEDULER TEAM
-# from rag_module import ingest_documents, answer_question  # RAG TEAM
+from rag_module import ingest_documents, answer_question  # RAG TEAM
 # from location_module import suggest_places_for_task  # LOCATION TEAM
 
 
@@ -243,14 +246,13 @@ def render_docs_rag_tab():
             if not uploaded_files:
                 st.warning("Please upload at least one document.")
             else:
-                # === RAG TEAM: call your ingest_documents() function here ===
-                #
-                # from rag_module import ingest_documents
-                # ingest_documents(uploaded_files)
-                #
-                # For now, we just set a flag:
-                st.session_state.ingested_docs = True
-                st.success("Documents marked as ingested (placeholder).")
+                num_chunks = ingest_documents(uploaded_files)
+                st.session_state.ingested_docs = num_chunks > 0
+                if num_chunks > 0:
+                    st.success(f"Ingested {num_chunks} chunks into RAG.")
+                else:
+                    st.warning("No chunks were ingested. Check your documents.")
+
 
     with cols[1]:
         st.metric(
@@ -272,18 +274,10 @@ def render_docs_rag_tab():
         elif not query.strip():
             st.warning("Please enter a question.")
         else:
-            # === RAG TEAM: call your answer_question() function here ===
-            #
-            # from rag_module import answer_question
-            # answer = answer_question(query)
-            #
-            # For now, we show a placeholder:
-            answer = (
-                "RAG answer placeholder. "
-                "Once connected, this will show answers derived from your uploaded docs."
-            )
+            answer = answer_question(query)
             st.markdown("**Answer:**")
             st.write(answer)
+
 
 
 # =========================

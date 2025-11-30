@@ -1,7 +1,30 @@
+# Core Python deps
+python-dotenv
+
+# Streamlit UI
 streamlit
+
+# LangChain core + community integrations
 langchain
 langchain-community
+
+# Google Gemini (chat + embeddings)
 langchain-google-genai
+
+# HuggingFace text embeddings (for fallback)
+sentence-transformers
+langchain-huggingface
+
+# Vector DB (Chroma)
 chromadb
+
+# PDF & DOCX ingestion
 pypdf
-python-dotenv
+python-docx
+
+# Text splitting
+langchain-text-splitters
+
+# Optional utilities
+tqdm
+numpy

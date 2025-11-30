@@ -1,13 +1,4 @@
-# rag_module.py
-#
-# RAG without embeddings (because your AI Studio key has 0 embedding quota).
-# Uses Gemini 2.0 Flash to:
-#   - select relevant document chunks
-#   - answer questions about schedules, syllabi, and project docs
-# Includes a simple "intent detector" to switch between:
-#   - normal document Q&A
-#   - time-allocation / free-slot suggestions
-
+# Imports 
 import json
 import os
 from typing import List
@@ -18,16 +9,13 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_core.messages import SystemMessage, HumanMessage
 
 
-# =========================
-# Config & Globals
-# =========================
-
+# Configuration and constants for the RAG tool
 DATA_DIR = "rag_data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-MODEL_NAME = "gemini-2.0-flash"
+MODEL_NAME = "gemini-2.0-flash" 
 
-
+# The prompt used to guide the LLM
 SYSTEM_PROMPT = """
 You are TaskScapeAI, an AI assistant that helps people answer questions about their schedules, syllabi, and deadlines.
 
@@ -42,37 +30,27 @@ Here are the rules you must follow:
 6) Some tasks may have higher priority based on importance — not just deadlines. If the user specifies a task is higher importance, prioritize that task.
 7) Whenever possible, quote the exact lines or phrases from the document chunks that support your answer.
 8) Keep your answers short, structured, and helpful. Use bullet points when appropriate.
+9) Check for exam dates, project deadlines, and important milestones mentioned in the documents.
+10) Check exam percentages and grading breakdowns if the user asks about how their final grade is calculated.
+11) Make sure to not confuse percentages with dates.
 
 Your goal is to give accurate, document-grounded answers that help the user understand both their academic obligations and their available time.
 """
 
 
 SCHEDULE_HINT = """
-The documents appear to be a "Student Schedule by Day and Time" page.
+The documents appear to be a schedule in a tabular format.
 
 Columns correspond to days of the week (Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday).
 Rows correspond to time slots (8am, 9am, 10am, 11am, 12pm, 1pm, 2pm, 3pm, 4pm, etc.).
-
-Each block such as:
-
-"COE 414-32
-15870 Class
-9:00 am-9:50 am
-204 0403"
-
-means:
-- course code and section (COE 414-32),
-- then the time range (9:00 am-9:50 am),
-- then the room number (204 0403).
 
 When answering questions, focus on:
 - which courses happen on which days,
 - and the time ranges and free time around them.
 """
 
-
+# Function to get LLM
 def get_llm() -> ChatGoogleGenerativeAI:
-    """Create a Gemini chat model client using the GOOGLE_API_KEY from .env."""
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise EnvironmentError(
@@ -87,43 +65,28 @@ def get_llm() -> ChatGoogleGenerativeAI:
     )
 
 
-# =========================
-# Helpers for docs & chunks
-# =========================
-
+# Function to load files
 def load_file_to_text(uploaded_file) -> str:
-    """
-    Save the uploaded file into rag_data/ and extract its text.
-    Supports PDF and TXT for now.
-    """
+
     filename = uploaded_file.name
     path = os.path.join(DATA_DIR, filename)
 
-    # Save uploaded file bytes
     with open(path, "wb") as f:
         f.write(uploaded_file.read())
 
-    # Choose loader based on extension
     if filename.lower().endswith(".pdf"):
         loader = PyPDFLoader(path)
     else:
-        # fallback: treat as plain text
         loader = TextLoader(path)
 
     docs = loader.load()
     raw_text = " \n".join(d.page_content for d in docs)
 
-    # Basic cleanup: collapse all whitespace to single spaces
     cleaned = " ".join(raw_text.split())
     return cleaned
 
-
+# Function to chunk text
 def chunk_text(text: str, chunk_size: int = 1500, chunk_overlap: int = 200) -> List[str]:
-    """
-    Split text into chunks for RAG.
-
-    For short docs like schedules, we keep it as a single chunk.
-    """
     if len(text) < 2000:
         return [text]
 
@@ -133,41 +96,22 @@ def chunk_text(text: str, chunk_size: int = 1500, chunk_overlap: int = 200) -> L
     )
     return splitter.split_text(text)
 
-
+# Function to build document hint
 def build_doc_hint(chunks: List[str]) -> str:
-    """
-    Look at the document text and return an extra hint
-    (e.g., schedule-specific hint) if appropriate.
-    """
     all_text = " ".join(chunks).lower()
 
-    if "student schedule by day and time" in all_text:
+    if "schedule" in all_text:
         return SCHEDULE_HINT
 
-    # You can extend this later for syllabi / project docs if you want.
     return ""
 
-
-# =========================
-# Public API for Streamlit
-# =========================
-
+# Function to ingest documents
 def ingest_documents(uploaded_files: List) -> int:
-    """
-    Ingest uploaded files:
-      - extract text
-      - chunk it
-      - store chunks into rag_data/chunks.json
-
-    Returns:
-        number of chunks created.
-    """
     all_chunks: List[str] = []
 
     for file in uploaded_files:
         text = load_file_to_text(file)
         if not text.strip():
-            # No usable text extracted (e.g., scanned PDF with no OCR)
             print(f"[RAG] Warning: no text extracted from {file.name}")
             continue
 
@@ -175,31 +119,18 @@ def ingest_documents(uploaded_files: List) -> int:
         all_chunks.extend(chunks)
 
     if not all_chunks:
-        # Nothing to store
         chunks_path = os.path.join(DATA_DIR, "chunks.json")
         if os.path.exists(chunks_path):
             os.remove(chunks_path)
         return 0
 
-    # Persist chunks locally so we can use them later in answer_question
     with open(os.path.join(DATA_DIR, "chunks.json"), "w", encoding="utf-8") as f:
         json.dump(all_chunks, f, indent=2)
 
     return len(all_chunks)
 
-
+# Function to answer questions
 def answer_question(query: str) -> str:
-    """
-    Main RAG function used by the UI.
-
-    - Loads chunks from rag_data/chunks.json
-    - Uses Gemini to select relevant chunks
-    - Then uses Gemini again to answer, with two modes:
-
-      * Normal document Q&A
-      * Time allocation (finding free slots in schedule) when the question
-        clearly asks about "when can I work / where can I allocate time".
-    """
     chunks_path = os.path.join(DATA_DIR, "chunks.json")
     if not os.path.exists(chunks_path):
         return "No documents ingested yet."
@@ -210,7 +141,6 @@ def answer_question(query: str) -> str:
     if not chunks:
         return "No text was extracted from your documents."
 
-    # Decide whether the user is asking about time allocation vs normal Q&A
     q_lower = query.lower()
     time_keywords = [
         "free time",
@@ -225,16 +155,14 @@ def answer_question(query: str) -> str:
     ]
     is_time_allocation = any(kw in q_lower for kw in time_keywords)
 
-    # Build optional extra hint (e.g., schedule-specific)
     extra_hint = build_doc_hint(chunks)
 
-    # Build a numbered string for chunks so Gemini can read them more easily
     numbered_chunks = []
     for i, ch in enumerate(chunks, start=1):
         numbered_chunks.append(f"[CHUNK {i}]\n{ch}\n")
     chunks_text_for_llm = "\n".join(numbered_chunks)
 
-    # === Step 1: select relevant chunks ===
+    
     selection_prompt = f"""
 {extra_hint}
 
@@ -258,12 +186,11 @@ Return those relevant chunks as plain text. If none are relevant, return an empt
         ]
     )
 
-    # Make sure whatever the model outputs becomes a clean string
+    
     selected_chunks_text = str(selection_response.content)
 
-    # === Step 2: answer based on the selected chunks ===
+    
     if is_time_allocation:
-        # MODE B — time allocation / free-slot suggestions
         answer_prompt = f"""
 User question:
 {query}
@@ -289,7 +216,6 @@ If you truly cannot infer any free time from the schedule, say:
 "I couldn't identify any clear free time blocks from your documents."
 """
     else:
-        # MODE A — normal document Q&A (projects, syllabi, deadlines, etc.)
         answer_prompt = f"""
 User question:
 {query}

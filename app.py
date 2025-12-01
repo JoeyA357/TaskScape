@@ -3,15 +3,16 @@ from typing import List, Dict, Any
 
 import streamlit as st
 from dotenv import load_dotenv
-load_dotenv() # to load key 
 
+load_dotenv()  # to load keys from .env
 
-# Optional: once teammates create these files, you can uncomment the imports.
-# For now, we keep them commented so the UI runs with placeholders.
-
-from scheduler_module import build_schedule          # SCHEDULER TEAM
+from scheduler_module import build_schedule  # SCHEDULER TEAM
 from rag_module import ingest_documents, answer_question  # RAG TEAM
-# from location_module import suggest_places_for_task  # LOCATION TEAM
+from location_module import (
+    suggest_places_for_task,
+    suggest_places_for_task_with_coords,
+)  # LOCATION TEAM
+from streamlit_geolocation import streamlit_geolocation
 
 
 # =========================
@@ -21,8 +22,10 @@ from rag_module import ingest_documents, answer_question  # RAG TEAM
 def init_session_state():
     """Initialize all keys used in st.session_state."""
     if "tasks" not in st.session_state:
+        # List[Dict[str, Any]]
         st.session_state.tasks = []
     if "schedule" not in st.session_state:
+        # Dict[str, Any]
         st.session_state.schedule = {}
     if "ingested_docs" not in st.session_state:
         st.session_state.ingested_docs = False
@@ -30,6 +33,10 @@ def init_session_state():
         st.session_state.user_location = ""
     if "search_radius_km" not in st.session_state:
         st.session_state.search_radius_km = 2.0
+    if "current_lat" not in st.session_state:
+        st.session_state.current_lat = None
+    if "current_lon" not in st.session_state:
+        st.session_state.current_lon = None
 
 
 # =========================
@@ -41,8 +48,12 @@ def render_sidebar():
     st.sidebar.markdown("Context-aware To-Do & Schedule Assistant")
 
     st.sidebar.subheader("Day Settings")
-    st.session_state.day_start = st.sidebar.time_input("Day starts at", datetime.time(8, 0))
-    st.session_state.day_end = st.sidebar.time_input("Day ends at", datetime.time(22, 0))
+    st.session_state.day_start = st.sidebar.time_input(
+        "Day starts at", datetime.time(8, 0)
+    )
+    st.session_state.day_end = st.sidebar.time_input(
+        "Day ends at", datetime.time(22, 0)
+    )
 
     st.sidebar.subheader("Preferences")
     st.session_state.default_task_duration = st.sidebar.number_input(
@@ -59,13 +70,20 @@ def render_sidebar():
 
     st.sidebar.markdown("---")
     st.sidebar.caption(
-        "RAG, Scheduler, and Location logic will plug into clearly marked sections in this UI."
+        "RAG, Scheduler, and Location logic plug into clearly marked sections in this UI."
     )
 
 
 # =========================
 # Planner / Scheduler Tab
 # =========================
+
+def find_task_by_title(title: str) -> Dict[str, Any] | None:
+    for t in st.session_state.tasks:
+        if t["title"] == title:
+            return t
+    return None
+
 
 def render_planner_tab():
     st.header("📅 Planner & Tasks")
@@ -92,7 +110,9 @@ def render_planner_tab():
                 format="YYYY-MM-DD",
             )
             priority = st.selectbox("Priority", ["Low", "Medium", "High"], index=1)
-            task_type = st.selectbox("Task type", ["Study", "Project", "Admin", "Meeting", "Other"])
+            task_type = st.selectbox(
+                "Task type", ["Study", "Project", "Admin", "Meeting", "Other"]
+            )
             prefer_outside = st.checkbox(
                 "Better done outside (café/library)?",
                 value=st.session_state.prefers_outside_global,
@@ -119,23 +139,61 @@ def render_planner_tab():
                 )
                 st.success(f"Task '{title}' added.")
 
-    # ---- Task List ----
+    # ---- Task List with inline editing ----
     with col_tasks:
         st.subheader("Tasks")
 
         if not st.session_state.tasks:
             st.info("No tasks yet. Add one on the left.")
         else:
-            for i, task in enumerate(st.session_state.tasks):
-                with st.expander(f"{task['title']}  ({task['priority']})", expanded=False):
-                    st.markdown(f"**Type:** {task['task_type']}")
-                    st.markdown(f"**Duration:** {task['duration_min']} min")
-                    if task["deadline"]:
-                        st.markdown(f"**Deadline:** {task['deadline']}")
-                    if task["description"]:
-                        st.markdown(f"**Notes:** {task['description']}")
-                    st.markdown(
-                        f"**Prefer outside:** {'Yes' if task['prefer_outside'] else 'No'}"
+            for i, task in enumerate(list(st.session_state.tasks)):
+                with st.expander(
+                    f"{task['title']}  ({task['priority']})", expanded=False
+                ):
+                    st.markdown("**Edit task**")
+
+                    new_title = st.text_input(
+                        "Title",
+                        value=task["title"],
+                        key=f"title_{task['id']}",
+                    )
+                    new_desc = st.text_area(
+                        "Notes",
+                        value=task["description"],
+                        key=f"desc_{task['id']}",
+                        height=80,
+                    )
+                    new_duration = st.number_input(
+                        "Duration (minutes)",
+                        min_value=15,
+                        max_value=300,
+                        value=task["duration_min"],
+                        step=15,
+                        key=f"dur_{task['id']}",
+                    )
+                    new_deadline = st.text_input(
+                        "Deadline (YYYY-MM-DD or empty)",
+                        value=task["deadline"] or "",
+                        key=f"dead_{task['id']}",
+                    )
+                    priority_options = ["Low", "Medium", "High"]
+                    new_priority = st.selectbox(
+                        "Priority",
+                        priority_options,
+                        index=priority_options.index(task["priority"]),
+                        key=f"prio_{task['id']}",
+                    )
+                    type_options = ["Study", "Project", "Admin", "Meeting", "Other"]
+                    new_type = st.selectbox(
+                        "Task type",
+                        type_options,
+                        index=type_options.index(task["task_type"]),
+                        key=f"type_{task['id']}",
+                    )
+                    new_outside = st.checkbox(
+                        "Better done outside (café/library)?",
+                        value=task["prefer_outside"],
+                        key=f"outside_{task['id']}",
                     )
 
                     cols = st.columns(3)
@@ -148,6 +206,17 @@ def render_planner_tab():
                         task["completed"] = new_completed
 
                     with cols[1]:
+                        if st.button("Save changes", key=f"save_{task['id']}"):
+                            task["title"] = new_title.strip() or task["title"]
+                            task["description"] = new_desc.strip()
+                            task["duration_min"] = int(new_duration)
+                            task["deadline"] = new_deadline.strip() or None
+                            task["priority"] = new_priority
+                            task["task_type"] = new_type
+                            task["prefer_outside"] = new_outside
+                            st.success("Task updated.")
+
+                    with cols[2]:
                         if st.button("Delete", key=f"delete_{task['id']}"):
                             st.session_state.tasks.pop(i)
                             st.experimental_rerun()
@@ -164,20 +233,6 @@ def render_planner_tab():
             if not st.session_state.tasks:
                 st.warning("You have no tasks yet. Add tasks before scheduling.")
             else:
-                # === SCHEDULER TEAM: integrate your build_schedule() here ===
-                #
-                # Expected signature (you can adjust slightly, but keep the idea):
-                # from scheduler_module import build_schedule
-                #
-                # schedule = build_schedule(
-                #     tasks=st.session_state.tasks,
-                #     day_start=st.session_state.day_start,
-                #     day_end=st.session_state.day_end,
-                # )
-                #
-                # st.session_state.schedule = schedule
-                #
-                # For now, we use a placeholder:
                 st.session_state.schedule = build_schedule(
                     tasks=st.session_state.tasks,
                     day_start=st.session_state.day_start,
@@ -196,20 +251,16 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
     """
     Simple visual placeholder for the schedule.
 
-    SCHEDULER TEAM:
-    ---------------
-    If you return a dict of the form:
+    Expected format:
     {
         "days": {
-            "2025-11-27": [
+            "YYYY-MM-DD": [
                 {"time": "09:00-10:30", "task": "Study ML", "type": "Study"},
                 ...
             ],
             ...
         }
     }
-
-    this renderer will show it nicely.
     """
     if "days" not in schedule_data or not schedule_data["days"]:
         st.write(schedule_data)
@@ -255,7 +306,6 @@ def render_docs_rag_tab():
                 else:
                     st.warning("No chunks were ingested. Check your documents.")
 
-
     with cols[1]:
         st.metric(
             "Documents ingested?",
@@ -281,7 +331,6 @@ def render_docs_rag_tab():
             st.write(answer)
 
 
-
 # =========================
 # Locations / Study Places Tab
 # =========================
@@ -297,13 +346,25 @@ def render_locations_tab():
     # --------- User Location & Radius ---------
     st.subheader("Your Location")
 
-    col_loc, col_radius = st.columns([2, 1])
+    col_geo, col_loc, col_radius = st.columns([1, 2, 1])
+
+    with col_geo:
+        st.markdown("**Use my current location**")
+        geo = streamlit_geolocation()
+        if geo and geo.get("latitude") is not None:
+            st.session_state.current_lat = geo.get("latitude")
+            st.session_state.current_lon = geo.get("longitude")
+            st.caption(
+                f"📍 Current location detected: {geo['latitude']:.4f}, {geo['longitude']:.4f}"
+            )
+
     with col_loc:
         st.session_state.user_location = st.text_input(
-            "Enter your location",
+            "Or type a location manually",
             value=st.session_state.user_location,
-            placeholder="e.g., LAU Beirut, Hamra, Brummana...",
+            placeholder="e.g., Byblos, Lebanon",
         )
+
     with col_radius:
         st.session_state.search_radius_km = st.slider(
             "Search radius (km)",
@@ -346,35 +407,41 @@ def render_location_mode_specific_task():
     )
 
     if st.button("Find places for this task"):
-        if not st.session_state.user_location.strip():
-            st.warning("Please enter your location above.")
-        else:
-            # === LOCATION TEAM: call your suggest_places_for_task() here ===
-            #
-            # from location_module import suggest_places_for_task
-            # places = suggest_places_for_task(
-            #     task=selected_task,
-            #     user_location=st.session_state.user_location,
-            #     radius_km=st.session_state.search_radius_km,
-            # )
-            #
-            # For now, we mock a couple of places:
-            places = [
-                {
-                    "name": "Quiet Beans Café",
-                    "distance_km": 0.8,
-                    "best_for": "deep focus / study",
-                    "notes": "Usually quiet before 5pm, good Wi-Fi.",
-                },
-                {
-                    "name": "Central Library",
-                    "distance_km": 1.3,
-                    "best_for": "long study sessions",
-                    "notes": "Silent floor, many outlets.",
-                },
-            ]
+        has_text_loc = bool(st.session_state.user_location.strip())
+        has_coords = (
+            st.session_state.get("current_lat") is not None
+            and st.session_state.get("current_lon") is not None
+        )
 
-            st.success("Places generated (placeholder).")
+        if not has_text_loc and not has_coords:
+            st.warning("Please share your location (button) or type a city/area above.")
+            return
+
+        # Typed location has priority over GPS
+        if has_text_loc:
+            places = suggest_places_for_task(
+                task=selected_task,
+                user_location=st.session_state.user_location,
+                radius_km=st.session_state.search_radius_km,
+            )
+        else:
+            places = suggest_places_for_task_with_coords(
+                task=selected_task,
+                lat=st.session_state.current_lat,
+                lon=st.session_state.current_lon,
+                radius_km=st.session_state.search_radius_km,
+            )
+
+        if not places:
+            st.warning("No places found near that location for this task.")
+        else:
+            first_name = (places[0].get("name") or "").lower()
+            if "location not found" in first_name or "place search error" in first_name:
+                st.warning(
+                    places[0].get("notes", "There was an error searching for places.")
+                )
+            else:
+                st.success("Places generated based on your location.")
             show_places_list(places)
 
 
@@ -388,14 +455,12 @@ def render_location_mode_today_schedule():
     today_str = str(datetime.date.today())
     day_blocks = st.session_state.schedule["days"].get(today_str, [])
 
-    # Filter for tasks that make sense to do outside (based on 'prefer_outside' flag if you include it in schedule)
     if not day_blocks:
         st.info("No tasks scheduled for today (or scheduler not yet integrated).")
         return
 
     st.markdown(f"### Tasks scheduled for today ({today_str})")
 
-    # Simple list of today's tasks with a button per task
     for idx, block in enumerate(day_blocks):
         col_info, col_btn = st.columns([3, 1])
         with col_info:
@@ -405,41 +470,66 @@ def render_location_mode_today_schedule():
             )
         with col_btn:
             if st.button("Suggest places", key=f"suggest_today_{idx}"):
-                if not st.session_state.user_location.strip():
-                    st.warning("Please enter your location above.")
+
+                has_text_loc = bool(st.session_state.user_location.strip())
+                has_coords = (
+                    st.session_state.get("current_lat") is not None
+                    and st.session_state.get("current_lon") is not None
+                )
+
+                if not has_text_loc and not has_coords:
+                    st.warning(
+                        "Please share your location (button) or type a city/area above."
+                    )
+                    continue
+
+                task = find_task_by_title(block.get("task", ""))
+                if task is None:
+                    st.warning("Could not match this scheduled block to a task.")
+                    continue
+
+                if has_text_loc:
+                    places = suggest_places_for_task(
+                        task=task,
+                        user_location=st.session_state.user_location,
+                        radius_km=st.session_state.search_radius_km,
+                    )
                 else:
-                    # === LOCATION TEAM: you may want a slightly different call here ===
-                    #
-                    # For example, if your scheduler includes the original task_id,
-                    # you can map back to the full task dict and call suggest_places_for_task().
-                    #
-                    # from location_module import suggest_places_for_task
-                    # places = suggest_places_for_task(
-                    #     task=...,  # matched from block
-                    #     user_location=st.session_state.user_location,
-                    #     radius_km=st.session_state.search_radius_km,
-                    # )
-                    #
-                    # Placeholder mock:
-                    places = [
-                        {
-                            "name": "Today Spot Café",
-                            "distance_km": 0.9,
-                            "best_for": "this type of task",
-                            "notes": "Good for the scheduled time slot.",
-                        }
-                    ]
-                    st.success("Places generated for this scheduled task (placeholder).")
+                    places = suggest_places_for_task_with_coords(
+                        task=task,
+                        lat=st.session_state.current_lat,
+                        lon=st.session_state.current_lon,
+                        radius_km=st.session_state.search_radius_km,
+                    )
+
+                if not places:
+                    st.warning("No places found near that location for this task.")
+                else:
+                    st.success("Places generated for this scheduled task.")
                     show_places_list(places)
 
 
 def show_places_list(places: List[Dict[str, Any]]):
     st.markdown("### Suggested Places")
     for p in places:
+        name = p.get("name", "Unknown Place")
+        dist = p.get("distance_km", "?")
+        best_for = p.get("best_for", "N/A")
+        notes = p.get("notes", "")
+
+        lat = p.get("lat")
+        lon = p.get("lon")
+        if lat is not None and lon is not None:
+            maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            maps_link = f"[Open in Google Maps]({maps_url})"
+        else:
+            maps_link = ""
+
         st.markdown(
-            f"**{p.get('name', 'Unknown Place')}** — {p.get('distance_km', '?')} km away  \n"
-            f"*Best for:* {p.get('best_for', 'N/A')}  \n"
-            f"*Notes:* {p.get('notes', '')}"
+            f"**{name}** — {dist} km away  \n"
+            f"*Best for:* {best_for}  \n"
+            f"*Notes:* {notes}  \n"
+            f"{maps_link}"
         )
 
 
@@ -473,4 +563,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

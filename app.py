@@ -9,7 +9,7 @@ load_dotenv() # to load key
 # Optional: once teammates create these files, you can uncomment the imports.
 # For now, we keep them commented so the UI runs with placeholders.
 
-# from scheduler_module import build_schedule          # SCHEDULER TEAM
+from scheduler_module import build_schedule          # SCHEDULER TEAM
 from rag_module import ingest_documents, answer_question  # RAG TEAM
 # from location_module import suggest_places_for_task  # LOCATION TEAM
 

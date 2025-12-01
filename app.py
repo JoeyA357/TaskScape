@@ -178,11 +178,13 @@ def render_planner_tab():
                 # st.session_state.schedule = schedule
                 #
                 # For now, we use a placeholder:
-                st.session_state.schedule = {
-                    "info": "Scheduler not yet connected. This is a placeholder.",
-                    "days": {},
-                }
-                st.success("Schedule generation triggered (placeholder).")
+                st.session_state.schedule = build_schedule(
+                    tasks=st.session_state.tasks,
+                    day_start=st.session_state.day_start,
+                    day_end=st.session_state.day_end,
+                )
+
+                st.success("Schedule generated!")
 
         if st.session_state.schedule:
             render_schedule_view(st.session_state.schedule)
@@ -471,3 +473,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

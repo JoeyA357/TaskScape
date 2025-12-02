@@ -70,7 +70,7 @@ def render_sidebar():
 def render_planner_tab():
     st.header("📅 Planner & Tasks")
 
-    col_form, col_tasks, col_schedule = st.columns([1.1, 1.2, 1.5])
+    col_form, col_tasks = st.columns([1, 1])
 
     # ---- Add Task Form ----
     with col_form:
@@ -152,76 +152,223 @@ def render_planner_tab():
                             st.session_state.tasks.pop(i)
                             st.experimental_rerun()
 
-    # ---- Schedule Preview / Actions ----
-    with col_schedule:
-        st.subheader("Schedule")
+    st.markdown("---")
 
-        st.markdown(
-            "This will show your generated schedule using the **Scheduler module**."
-        )
+ # ---- Schedule Section (Full Width Below) ----
+    st.subheader("Schedule")
+    st.markdown("This will show your generated schedule using the **Scheduler module**.")
 
-        if st.button("Generate / Update Schedule"):
-            if not st.session_state.tasks:
-                st.warning("You have no tasks yet. Add tasks before scheduling.")
-            else:
-                # === SCHEDULER TEAM: integrate your build_schedule() here ===
-                #
-                # Expected signature (you can adjust slightly, but keep the idea):
-                # from scheduler_module import build_schedule
-                #
-                # schedule = build_schedule(
-                #     tasks=st.session_state.tasks,
-                #     day_start=st.session_state.day_start,
-                #     day_end=st.session_state.day_end,
-                # )
-                #
-                # st.session_state.schedule = schedule
-                #
-                # For now, we use a placeholder:
-                st.session_state.schedule = build_schedule(
-                    tasks=st.session_state.tasks,
-                    day_start=st.session_state.day_start,
-                    day_end=st.session_state.day_end,
-                )
-
-                st.success("Schedule generated!")
-
-        if st.session_state.schedule:
-            render_schedule_view(st.session_state.schedule)
+    if st.button("Generate / Update Schedule"):
+        if not st.session_state.tasks:
+            st.warning("You have no tasks yet. Add tasks before scheduling.")
         else:
-            st.info("No schedule yet. Click **Generate / Update Schedule** to create one.")
+            st.session_state.schedule = build_schedule(
+                tasks=st.session_state.tasks,
+                day_start=st.session_state.day_start,
+                day_end=st.session_state.day_end,
+            )
+            st.success("Schedule generated!")
+
+    if st.session_state.schedule:
+        render_schedule_view(st.session_state.schedule)
+    else:
+        st.info("No schedule yet. Click **Generate / Update Schedule** to create one.")
 
 
 def render_schedule_view(schedule_data: Dict[str, Any]):
     """
-    Simple visual placeholder for the schedule.
-
-    SCHEDULER TEAM:
-    ---------------
-    If you return a dict of the form:
-    {
-        "days": {
-            "2025-11-27": [
-                {"time": "09:00-10:30", "task": "Study ML", "type": "Study"},
-                ...
-            ],
-            ...
-        }
-    }
-
-    this renderer will show it nicely.
+    Display schedule in a weekly calendar grid format with dark theme.
     """
+    import streamlit as st
+    
     if "days" not in schedule_data or not schedule_data["days"]:
-        st.write(schedule_data)
+        st.info("No schedule data available.")
         return
 
-    for day, blocks in schedule_data["days"].items():
-        st.markdown(f"### {day}")
-        for block in blocks:
-            st.markdown(
-                f"- `{block.get('time', '')}` — **{block.get('task', '')}** "
-                f"({block.get('type', 'task')})"
-            )
+    # Get the week range
+    week_start = datetime.datetime.strptime(schedule_data.get("week_start", str(datetime.date.today())), "%Y-%m-%d").date()
+    
+    # Define time slots (from 8 AM to 8 PM)
+    time_slots = []
+    for hour in range(8, 21):  # 8:00 to 20:00
+        time_slots.append(f"{hour:02d}:00")
+    
+    # Days of the week
+    days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    
+    # Create the calendar grid using HTML/CSS with dark theme
+    st.markdown("""
+    <style>
+    .schedule-grid {
+        display: grid;
+        grid-template-columns: 80px repeat(6, 1fr);
+        gap: 1px;
+        background-color: #444;
+        border: 2px solid #555;
+        margin: 20px 0;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .schedule-header {
+        background-color: #2b2b2b;
+        color: #e0e0e0;
+        padding: 14px 8px;
+        text-align: center;
+        font-weight: bold;
+        font-size: 13px;
+        border-bottom: 2px solid #555;
+    }
+    .schedule-header small {
+        color: #999;
+        font-size: 11px;
+        font-weight: normal;
+    }
+    .schedule-time {
+        background-color: #1e1e1e;
+        padding: 10px 8px;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 600;
+        color: #aaa;
+        border-right: 1px solid #444;
+    }
+    .schedule-cell {
+        background-color: #262626;
+        padding: 4px;
+        min-height: 60px;
+        position: relative;
+    }
+    .task-block {
+        background-color: #e3f2fd;
+        border-left: 4px solid #2196f3;
+        padding: 8px 10px;
+        margin: 2px 0;
+        border-radius: 4px;
+        font-size: 11px;
+        line-height: 1.4;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+    .task-block.priority-High {
+        background-color: #ffcdd2;
+        border-left-color: #f44336;
+    }
+    .task-block.priority-Medium {
+        background-color: #ffe0b2;
+        border-left-color: #ff9800;
+    }
+    .task-block.priority-Low {
+        background-color: #c8e6c9;
+        border-left-color: #4caf50;
+    }
+    .task-title {
+        font-weight: 700;
+        color: #1a1a1a;
+        margin-bottom: 3px;
+        font-size: 12px;
+    }
+    .task-time {
+        font-size: 10px;
+        color: #424242;
+        font-weight: 500;
+    }
+    .task-type {
+        font-size: 10px;
+        color: #666;
+        font-style: italic;
+        margin-top: 2px;
+    }
+    .priority-legend {
+        display: flex;
+        gap: 20px;
+        margin-top: 15px;
+        padding: 10px;
+        background-color: #1e1e1e;
+        border-radius: 6px;
+        align-items: center;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #e0e0e0;
+        font-size: 13px;
+    }
+    .legend-color {
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Build the grid HTML
+    grid_html = '<div class="schedule-grid">'
+    
+    # Header row
+    grid_html += '<div class="schedule-header">Time</div>'
+    for i, day in enumerate(days_of_week):
+        day_date = week_start + datetime.timedelta(days=i)
+        grid_html += f'<div class="schedule-header">{day}<br><small>{day_date.strftime("%m/%d")}</small></div>'
+    
+    # Time slot rows
+    for time_slot in time_slots:
+        # Time column
+        grid_html += f'<div class="schedule-time">{time_slot}</div>'
+        
+        # Day columns
+        for i in range(6):  # Monday to Saturday
+            day_date = week_start + datetime.timedelta(days=i)
+            day_key = str(day_date)
+            
+            cell_html = '<div class="schedule-cell">'
+            
+            # Get tasks for this day
+            if day_key in schedule_data["days"]:
+                tasks = schedule_data["days"][day_key]
+                
+                # Filter tasks that fall in this time slot
+                slot_hour = int(time_slot.split(":")[0])
+                
+                for task in tasks:
+                    task_start_hour = int(task["time"].split("-")[0].split(":")[0])
+                    
+                    # If task starts in this hour slot
+                    if task_start_hour == slot_hour:
+                        priority = task.get("priority", "Medium")
+                        cell_html += f'''
+                        <div class="task-block priority-{priority}">
+                            <div class="task-title">{task["task"]}</div>
+                            <div class="task-time">{task["time"]}</div>
+                            <div class="task-type">{task["type"]}</div>
+                        </div>
+                        '''
+            
+            cell_html += '</div>'
+            grid_html += cell_html
+    
+    grid_html += '</div>'
+    
+    # Display the grid
+    st.markdown(grid_html, unsafe_allow_html=True)
+    
+    # Legend with dark theme
+    st.markdown("""
+    <div class="priority-legend">
+        <span style="color: #aaa; font-weight: 600; margin-right: 10px;">Priority:</span>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #f44336;"></div>
+            <span>High</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #ff9800;"></div>
+            <span>Medium</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #4caf50;"></div>
+            <span>Low</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # =========================

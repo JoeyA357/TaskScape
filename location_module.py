@@ -1,93 +1,305 @@
-# scheduler_module.py
+# location_module.py
 
-from datetime import time, date
-from typing import List, Dict, Any
+from typing import Dict, Any, List, Tuple
+import os
+import requests
+from math import radians, sin, cos, sqrt, atan2
 
-def build_schedule(
-    tasks: List[Dict[str, Any]],
-    day_start: time,
-    day_end: time,
-) -> Dict[str, Any]:
+
+# =============================
+# Helpers
+# =============================
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Compute distance between two lat/lon points in kilometers."""
+    R = 6371.0  # Earth radius in km
+
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return R * c
+
+
+def _get_google_key() -> str:
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GOOGLE_MAPS_API_KEY is not set. Add it to your .env file."
+        )
+    return api_key
+
+
+def _geocode_location(user_location: str) -> Tuple[float, float]:
     """
-    Inputs:
-        tasks: list of task dicts from st.session_state.tasks
-        day_start, day_end: working hours
+    Turn a text location into (lat, lon) using Google Geocoding.
+    Falls back to Nominatim only if Google fails.
+    """
+    if not user_location.strip():
+        raise ValueError("Empty location string.")
 
-    Output format expected by UI:
-    {
-        "days": {
-            "YYYY-MM-DD": [
-                {"time": "HH:MM-HH:MM", "task": "Title", "type": "Study" },
-                ...
-            ],
-            ...
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    if api_key:
+        try:
+            url = "https://maps.googleapis.com/maps/api/geocode/json"
+            params = {"address": user_location, "key": api_key}
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results", [])
+            if results:
+                loc = results[0]["geometry"]["location"]
+                return float(loc["lat"]), float(loc["lng"])
+        except Exception:
+            # If Google fails for any reason, we fall through to Nominatim
+            pass
+
+    # Fallback: Nominatim (not strictly necessary now, but nice as backup)
+    def _nominatim_query(q: str):
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": q,
+            "format": "json",
+            "limit": 1,
         }
-    }
+        headers = {
+            "User-Agent": "TaskScapeAI/1.0 (student project)",
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    # Try as-is
+    results = _nominatim_query(user_location)
+    if results:
+        lat = float(results[0]["lat"])
+        lon = float(results[0]["lon"])
+        return lat, lon
+
+    # Try with ", Lebanon"
+    results = _nominatim_query(user_location + ", Lebanon")
+    if results:
+        lat = float(results[0]["lat"])
+        lon = float(results[0]["lon"])
+        return lat, lon
+
+    raise ValueError(f"No coordinates found for location: {user_location}")
+
+
+def _infer_place_profiles_for_task(task: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    # TODO: implement scheduling logic here
-    from datetime import datetime, timedelta, date
+    Decide which place profiles to search for based on the task.
 
-    # 1) Convert priorities → numeric for sorting
-    def priority_value(p):
-        return {"High": 0, "Medium": 1, "Low": 2}.get(p, 2)
+    Each profile is a dict:
+      {"type": <google_place_type_or_None>, "keyword": <optional keyword or None>}
+    """
+    ttype = (task.get("task_type") or "").lower()
+    prefer_outside = bool(task.get("prefer_outside", False))
 
-    # 2) Convert deadlines to dates
-    def parse_deadline(d):
-        return datetime.strptime(d, "%Y-%m-%d").date() if d else date.today()
+    # Google place types we care about:
+    # - "library"
+    # - "cafe"
+    # - "university"
+    # there's no official "coworking_space" type, so we use a keyword.
+    if ttype in ["study", "project"]:
+        if prefer_outside:
+            return [
+                {"type": "library", "keyword": None},
+                {"type": "cafe", "keyword": None},
+                {"type": "point_of_interest", "keyword": "coworking space"},
+            ]
+        else:
+            return [
+                {"type": "library", "keyword": None},
+                {"type": "university", "keyword": "library"},
+            ]
+    elif ttype in ["meeting"]:
+        return [
+            {"type": "cafe", "keyword": None},
+            {"type": "restaurant", "keyword": "coffee"},
+        ]
+    else:
+        # Admin / Other → generic places to sit and work
+        return [
+            {"type": "cafe", "keyword": None},
+            {"type": "library", "keyword": None},
+        ]
 
-    enriched_tasks = []
-    for t in tasks:
-        enriched_tasks.append({
-            **t,
-            "deadline_date": parse_deadline(t.get("deadline")),
-            "priority_rank": priority_value(t.get("priority")),
-        })
 
-    # 3) Sort tasks by: deadline → priority → shorter duration first
-    enriched_tasks.sort(
-        key=lambda t: (t["deadline_date"], t["priority_rank"], t["duration_min"])
-    )
+def _google_places_nearby(
+    lat: float,
+    lon: float,
+    radius_m: int,
+    profiles: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Call Google Places Nearby Search for each profile and merge results.
+    """
+    api_key = _get_google_key()
+    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 
-    # Working hours range
-    day_start_dt = datetime.combine(date.today(), day_start)
-    day_end_dt = datetime.combine(date.today(), day_end)
-    daily_minutes = int((day_end_dt - day_start_dt).total_seconds() // 60)
+    seen_place_ids = set()
+    all_results: List[Dict[str, Any]] = []
 
-    # Prepare schedule output
-    schedule = {"days": {}}
+    for prof in profiles:
+        params = {
+            "location": f"{lat},{lon}",
+            "radius": radius_m,
+            "key": api_key,
+        }
+        if prof.get("type"):
+            params["type"] = prof["type"]
+        if prof.get("keyword"):
+            params["keyword"] = prof["keyword"]
 
-    # Start scheduling from today
-    current_day = date.today()
-    current_start_dt = datetime.combine(current_day, day_start)
-    remaining_minutes_today = daily_minutes
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            # If this particular call fails, skip it
+            all_results.append(
+                {
+                    "error": f"Google Places error for profile {prof}: {e}"
+                }
+            )
+            continue
 
-    # 4) Fill tasks in order
-    for t in enriched_tasks:
-        duration = t["duration_min"]
+        status = data.get("status", "")
+        if status not in ["OK", "ZERO_RESULTS"]:
+            # Could be OVER_QUERY_LIMIT, REQUEST_DENIED, etc.
+            all_results.append(
+                {
+                    "error": f"Google Places status={status} for profile {prof}"
+                }
+            )
+            continue
 
-        # If it doesn't fit today → move to next day
-        while duration > remaining_minutes_today:
-            current_day += timedelta(days=1)
-            current_start_dt = datetime.combine(current_day, day_start)
-            remaining_minutes_today = daily_minutes
+        for result in data.get("results", []):
+            place_id = result.get("place_id")
+            if not place_id or place_id in seen_place_ids:
+                continue
+            seen_place_ids.add(place_id)
+            all_results.append(result)
 
-        # Block start / end
-        block_start = current_start_dt
-        block_end = block_start + timedelta(minutes=duration)
+    # Filter out pure error records
+    return [r for r in all_results if "error" not in r]
 
-        # Save to schedule
-        day_key = str(current_day)
-        if day_key not in schedule["days"]:
-            schedule["days"][day_key] = []
 
-        schedule["days"][day_key].append({
-            "time": f"{block_start.strftime('%H:%M')}-{block_end.strftime('%H:%M')}",
-            "task": t["title"],
-            "type": t["task_type"],
-        })
+def _google_elements_to_places(
+    elements: List[Dict[str, Any]],
+    user_lat: float,
+    user_lon: float,
+    task: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """
+    Convert Google Places results into the place dict format used by the UI.
+    """
+    results: List[Dict[str, Any]] = []
+    ttype = (task.get("task_type") or "").lower()
 
-        # Move pointer forward
-        current_start_dt = block_end
-        remaining_minutes_today -= duration
+    for el in elements:
+        name = el.get("name")
+        if not name:
+            continue
 
-    return schedule
+        geometry = el.get("geometry", {})
+        loc = geometry.get("location", {})
+        plat = loc.get("lat")
+        plon = loc.get("lng")
+        if plat is None or plon is None:
+            continue
+
+        plat_f = float(plat)
+        plon_f = float(plon)
+
+        dist_km = _haversine_km(user_lat, user_lon, plat_f, plon_f)
+
+        types = el.get("types", []) or []
+        if "library" in types:
+            best_for = "deep focus / study"
+        elif "cafe" in types or "restaurant" in types:
+            best_for = "casual study / meetings"
+        elif "university" in types:
+            best_for = "study / group work"
+        else:
+            best_for = "general work / study"
+
+        notes = f"Suggested for {ttype or 'your task'}."
+
+        results.append(
+            {
+                "name": name,
+                "distance_km": round(dist_km, 2),
+                "best_for": best_for,
+                "notes": notes,
+                "lat": plat_f,
+                "lon": plon_f,
+            }
+        )
+
+    results.sort(key=lambda p: p["distance_km"])
+    return results[:8]
+
+
+# =============================
+# Public Tool Functions
+# =============================
+
+def suggest_places_for_task_with_coords(
+    task: Dict[str, Any],
+    lat: float,
+    lon: float,
+    radius_km: float,
+) -> List[Dict[str, Any]]:
+    """
+    Suggest nearby places when we already know the user's coordinates.
+    Uses Google Places Nearby Search.
+    """
+    profiles = _infer_place_profiles_for_task(task)
+    radius_m = int(radius_km * 1000)
+
+    try:
+        elements = _google_places_nearby(lat, lon, radius_m, profiles)
+    except Exception as e:
+        return [
+            {
+                "name": "Place search error",
+                "distance_km": 0.0,
+                "best_for": "N/A",
+                "notes": f"Error while calling Google Places: {e}",
+            }
+        ]
+
+    if not elements:
+        return []
+
+    return _google_elements_to_places(elements, lat, lon, task)
+
+
+def suggest_places_for_task(
+    task: Dict[str, Any],
+    user_location: str,
+    radius_km: float,
+) -> List[Dict[str, Any]]:
+    """
+    Suggest nearby places using:
+      - Google Geocoding for the string location
+      - Google Places Nearby Search for the actual places
+    """
+    if not user_location.strip():
+        return []
+
+    try:
+        lat, lon = _geocode_location(user_location)
+    except Exception as e:
+        return [
+            {
+                "name": "Location not found",
+                "distance_km": 0.0,
+                "best_for": "N/A",
+                "notes": f"Could not geocode '{user_location}': {e}",
+            }
+        ]
+
+    return suggest_places_for_task_with_coords(task, lat, lon, radius_km)

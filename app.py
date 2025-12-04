@@ -1,5 +1,5 @@
 import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -150,26 +150,62 @@ def render_planner_tab():
                     with cols[1]:
                         if st.button("Delete", key=f"delete_{task['id']}"):
                             st.session_state.tasks.pop(i)
-                            st.experimental_rerun()
+                            st.rerun()
 
     st.markdown("---")
 
- # ---- Schedule Section (Full Width Below) ----
+    # ---- Schedule Section (Full Width Below) ----
     st.subheader("Schedule")
     st.markdown("This will show your generated schedule using the **Scheduler module**.")
 
-    if st.button("Generate / Update Schedule"):
-        if not st.session_state.tasks:
-            st.warning("You have no tasks yet. Add tasks before scheduling.")
-        else:
-            st.session_state.schedule = build_schedule(
-                tasks=st.session_state.tasks,
-                day_start=st.session_state.day_start,
-                day_end=st.session_state.day_end,
-            )
-            st.success("Schedule generated!")
+    # Check if blocked times are available
+    import os
+    schedule_blocks_file = os.path.join("rag_data", "schedule_blocks.json")
+    has_blocked_times = os.path.exists(schedule_blocks_file)
+    
+    # Create columns for button and checkbox
+    col_btn, col_check = st.columns([2, 2])
+    
+    with col_check:
+        use_blocked_times = st.checkbox(
+            "Avoid class/schedule times",
+            value=False,
+            disabled=not has_blocked_times,
+            help="Schedule tasks around your class times (requires ingested schedule in RAG tab)"
+        )
+        
+        if use_blocked_times and not has_blocked_times:
+            st.warning("⚠️ No schedule found. Please ingest a schedule in the RAG tab first.")
+        elif has_blocked_times and not use_blocked_times:
+            st.info("💡 Tip: Check the box to avoid scheduling during class times")
+    
+    with col_btn:
+        if st.button("Generate / Update Schedule", use_container_width=True):
+            if not st.session_state.tasks:
+                st.warning("You have no tasks yet. Add tasks before scheduling.")
+            elif use_blocked_times and not has_blocked_times:
+                st.error("Cannot use blocked times without an ingested schedule. Please upload a schedule in the RAG tab.")
+            else:
+                try:
+                    st.session_state.schedule = build_schedule(
+                        tasks=st.session_state.tasks,
+                        day_start=st.session_state.day_start,
+                        day_end=st.session_state.day_end,
+                        use_blocked_times=True
+                    )
+                    
+                    if use_blocked_times:
+                        st.success("✅ Schedule generated! Tasks scheduled around your classes.")
+                    else:
+                        st.success("✅ Schedule generated!")
+                except Exception as e:
+                    st.error(f"Error generating schedule: {str(e)}")
 
     if st.session_state.schedule:
+        # Show info about blocked times if used
+        if st.session_state.schedule.get("using_blocked_times"):
+            st.info("📚 This schedule avoids your class times. Tasks are placed in free time slots.")
+        
         render_schedule_view(st.session_state.schedule)
     else:
         st.info("No schedule yet. Click **Generate / Update Schedule** to create one.")
@@ -177,107 +213,209 @@ def render_planner_tab():
 
 def render_schedule_view(schedule_data: Dict[str, Any]):
     """
-    Display schedule in a weekly calendar grid format with dark theme.
+    Display schedule in a continuous vertical layout:
+    - One tall column per day.
+    - Each task/class block is a single div whose top & height are proportional
+      to its start/end times, so it visually stretches over the time range.
+    - Class blocks get a consistent color per course across the week.
     """
+    import datetime
+    from datetime import time
     import streamlit as st
-    
+
     if "days" not in schedule_data or not schedule_data["days"]:
         st.info("No schedule data available.")
         return
 
-    # Get the week range
-    week_start = datetime.datetime.strptime(schedule_data.get("week_start", str(datetime.date.today())), "%Y-%m-%d").date()
-    
-    # Define time slots (from 8 AM to 8 PM)
-    time_slots = []
-    for hour in range(8, 21):  # 8:00 to 20:00
-        time_slots.append(f"{hour:02d}:00")
-    
-    # Days of the week
+    # Week start
+    week_start = datetime.datetime.strptime(
+        schedule_data.get("week_start", str(datetime.date.today())),
+        "%Y-%m-%d",
+    ).date()
+
+    # Time range (08:00–20:00 like before)
+    DAY_START_HOUR = 8
+    DAY_END_HOUR = 20
+    slot_labels = [f"{h:02d}:00" for h in range(DAY_START_HOUR, DAY_END_HOUR + 1)]
+    SLOT_HEIGHT_PX = 60  # visual height per hour
+
+    # Monday–Saturday
     days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-    
-    # Create the calendar grid using HTML/CSS with dark theme
-    st.markdown("""
+
+    # ----- Build course → color mapping for CLASS blocks -----
+    # Light colors, no strong red/yellow/orange
+    course_palette = [
+        "#dcefff",  # light blue
+        "#ffcfef",  # light pink
+        "#dbc7ff",  # light purple
+        "#b2f2d5",  # light cyan
+        "#fbccc5",  # indigo-ish
+        "#d5dfb6",  # teal-ish
+        "#c19cc8",  # soft lavender
+        "#f3e5f5",  # very light purple
+        "#dcf5ff",  # icy blue
+        "#c4f8ff",  # aqua
+    ]
+
+    class_courses = []
+    for day_blocks in schedule_data["days"].values():
+        for block in day_blocks:
+            if block.get("type") == "Class":
+                title = block.get("task", "")
+                if title and title not in class_courses:
+                    class_courses.append(title)
+
+    course_colors = {
+        course: course_palette[i % len(course_palette)]
+        for i, course in enumerate(class_courses)
+    }
+
+    # Helpers
+    def _to_time(t):
+        if isinstance(t, time):
+            return t
+        if isinstance(t, str):
+            try:
+                return datetime.datetime.strptime(t, "%H:%M").time()
+            except Exception:
+                return None
+        return None
+
+    def _minutes(t: time) -> int:
+        return t.hour * 60 + t.minute
+
+    day_start_min = DAY_START_HOUR * 60
+    day_end_min = DAY_END_HOUR * 60
+
+    # ---------- CSS ----------
+    st.markdown(
+        f"""
     <style>
-    .schedule-grid {
+    .schedule-wrapper {{
+        background-color: #151515;
+        border-radius: 8px;
+        border: 2px solid #444;
+        padding: 10px;
+        margin-top: 10px;
+        color: #e0e0e0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }}
+
+    .schedule-header-row {{
         display: grid;
         grid-template-columns: 80px repeat(6, 1fr);
-        gap: 1px;
-        background-color: #444;
-        border: 2px solid #555;
-        margin: 20px 0;
-        border-radius: 8px;
-        overflow: hidden;
-    }
-    .schedule-header {
+        margin-bottom: 6px;
+    }}
+
+    .schedule-header-cell {{
         background-color: #2b2b2b;
-        color: #e0e0e0;
-        padding: 14px 8px;
+        padding: 10px 6px;
+        border-right: 1px solid #444;
         text-align: center;
-        font-weight: bold;
+        font-weight: 600;
         font-size: 13px;
-        border-bottom: 2px solid #555;
-    }
-    .schedule-header small {
+    }}
+
+    .schedule-header-cell small {{
+        display: block;
         color: #999;
         font-size: 11px;
-        font-weight: normal;
-    }
-    .schedule-time {
-        background-color: #1e1e1e;
-        padding: 10px 8px;
-        text-align: center;
-        font-size: 12px;
-        font-weight: 600;
-        color: #aaa;
+        font-weight: 400;
+        margin-top: 2px;
+    }}
+
+    .schedule-body {{
+        display: grid;
+        grid-template-columns: 80px 1fr;  /* time + all days */
+        gap: 0;
+    }}
+
+    .time-column {{
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+    }}
+
+    .time-slot-label {{
+        height: {SLOT_HEIGHT_PX}px;
+        border-top: 1px solid #333;
         border-right: 1px solid #444;
-    }
-    .schedule-cell {
-        background-color: #262626;
-        padding: 4px;
-        min-height: 60px;
+        font-size: 11px;
+        color: #aaa;
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        padding-top: 6px;
+    }}
+
+    .days-container {{
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);  /* 6 equal day columns */
+        border-left: 1px solid #444;
+    }}
+
+    .day-column {{
         position: relative;
-    }
-    .task-block {
+        height: {SLOT_HEIGHT_PX * (len(slot_labels) - 1)}px;
+        border-left: 1px solid #444;
+        border-right: 1px solid #444;
+        background:
+            repeating-linear-gradient(
+                to bottom,
+                #202020 0,
+                #202020 1px,
+                #161616 1px,
+                #161616 {SLOT_HEIGHT_PX}px
+            );
+    }}
+
+    .task-block {{
+        position: absolute;
+        left: 6px;
+        right: 6px;
         background-color: #e3f2fd;
         border-left: 4px solid #2196f3;
-        padding: 8px 10px;
-        margin: 2px 0;
         border-radius: 4px;
+        padding: 6px 8px;
         font-size: 11px;
         line-height: 1.4;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-    }
-    .task-block.priority-High {
+        box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+        overflow: hidden;
+    }}
+
+    /* Priority colors – mainly for tasks (Study, etc.) */
+    .task-block.priority-High {{
         background-color: #ffcdd2;
         border-left-color: #f44336;
-    }
-    .task-block.priority-Medium {
+    }}
+    .task-block.priority-Medium {{
         background-color: #ffe0b2;
         border-left-color: #ff9800;
-    }
-    .task-block.priority-Low {
+    }}
+    .task-block.priority-Low {{
         background-color: #c8e6c9;
         border-left-color: #4caf50;
-    }
-    .task-title {
+    }}
+
+    .task-title {{
         font-weight: 700;
         color: #1a1a1a;
-        margin-bottom: 3px;
+        margin-bottom: 2px;
         font-size: 12px;
-    }
-    .task-time {
+    }}
+    .task-time {{
         font-size: 10px;
         color: #424242;
         font-weight: 500;
-    }
-    .task-type {
+    }}
+    .task-type {{
         font-size: 10px;
         color: #666;
         font-style: italic;
         margin-top: 2px;
-    }
-    .priority-legend {
+    }}
+
+    .priority-legend {{
         display: flex;
         gap: 20px;
         margin-top: 15px;
@@ -285,90 +423,132 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
         background-color: #1e1e1e;
         border-radius: 6px;
         align-items: center;
-    }
-    .legend-item {
+    }}
+    .legend-item {{
         display: flex;
         align-items: center;
         gap: 8px;
         color: #e0e0e0;
         font-size: 13px;
-    }
-    .legend-color {
+    }}
+    .legend-color {{
         width: 16px;
         height: 16px;
         border-radius: 3px;
-    }
+    }}
     </style>
-    """, unsafe_allow_html=True)
-    
-    # Build the grid HTML
-    grid_html = '<div class="schedule-grid">'
-    
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # ---------- Build HTML ----------
+    html = ['<div class="schedule-wrapper">']
+
     # Header row
-    grid_html += '<div class="schedule-header">Time</div>'
+    html.append('<div class="schedule-header-row">')
+    html.append('<div class="schedule-header-cell">Time</div>')
     for i, day in enumerate(days_of_week):
         day_date = week_start + datetime.timedelta(days=i)
-        grid_html += f'<div class="schedule-header">{day}<br><small>{day_date.strftime("%m/%d")}</small></div>'
-    
-    # Time slot rows
-    for time_slot in time_slots:
-        # Time column
-        grid_html += f'<div class="schedule-time">{time_slot}</div>'
-        
-        # Day columns
-        for i in range(6):  # Monday to Saturday
-            day_date = week_start + datetime.timedelta(days=i)
-            day_key = str(day_date)
-            
-            cell_html = '<div class="schedule-cell">'
-            
-            # Get tasks for this day
-            if day_key in schedule_data["days"]:
-                tasks = schedule_data["days"][day_key]
-                
-                # Filter tasks that fall in this time slot
-                slot_hour = int(time_slot.split(":")[0])
-                
-                for task in tasks:
-                    task_start_hour = int(task["time"].split("-")[0].split(":")[0])
-                    
-                    # If task starts in this hour slot
-                    if task_start_hour == slot_hour:
-                        priority = task.get("priority", "Medium")
-                        cell_html += f'''
-                        <div class="task-block priority-{priority}">
-                            <div class="task-title">{task["task"]}</div>
-                            <div class="task-time">{task["time"]}</div>
-                            <div class="task-type">{task["type"]}</div>
-                        </div>
-                        '''
-            
-            cell_html += '</div>'
-            grid_html += cell_html
-    
-    grid_html += '</div>'
-    
-    # Display the grid
-    st.markdown(grid_html, unsafe_allow_html=True)
-    
-    # Legend with dark theme
-    st.markdown("""
+        html.append(
+            f'<div class="schedule-header-cell">{day}'
+            f'<small>{day_date.strftime("%m/%d")}</small></div>'
+        )
+    html.append("</div>")  # header-row
+
+    # Body: time column + day columns
+    html.append('<div class="schedule-body">')
+
+    # Time column
+    html.append('<div class="time-column">')
+    for label in slot_labels[:-1]:  # labels for 08:00..19:00 rows
+        html.append(f'<div class="time-slot-label">{label}</div>')
+    html.append("</div>")  # time-column
+
+    # Day columns container
+    html.append('<div class="days-container">')
+
+    for i in range(6):
+        day_date = week_start + datetime.timedelta(days=i)
+        day_key = str(day_date)
+        blocks = schedule_data["days"].get(day_key, [])
+
+        html.append('<div class="day-column">')
+
+        for block in blocks:
+            s = _to_time(block.get("start_time"))
+            e = _to_time(block.get("end_time"))
+            if not s or not e:
+                # fallback from "time" string
+                try:
+                    start_str, end_str = block["time"].split("-")
+                    s = datetime.datetime.strptime(start_str.strip(), "%H:%M").time()
+                    e = datetime.datetime.strptime(end_str.strip(), "%H:%M").time()
+                except Exception:
+                    continue
+
+            start_min = max(_minutes(s), day_start_min)
+            end_min = min(_minutes(e), day_end_min)
+            if end_min <= start_min:
+                continue
+
+            # Map to pixels
+            top_px = (start_min - day_start_min) / 60 * SLOT_HEIGHT_PX
+            height_px = max(
+                SLOT_HEIGHT_PX,  # minimum height = 1 full hour slot
+                (end_min - start_min) / 60 * SLOT_HEIGHT_PX,
+            )
+
+            priority = block.get("priority", "Medium")
+            title = block.get("task", "")
+            time_range = block.get("time", "")
+            ttype = block.get("type", "")
+
+            # Default style uses priority-based colors
+            style = f"top:{top_px:.1f}px;height:{height_px:.1f}px;"
+
+            # Override colors for CLASS blocks with a per-course color
+            if ttype == "Class":
+                course_color = course_colors.get(title, "#e3f2fd")
+                style += f"background-color:{course_color};border-left-color:{course_color};"
+
+            html.append(
+                f'<div class="task-block priority-{priority}" '
+                f'style="{style}">'
+                f'<div class="task-title">{title}</div>'
+                f'<div class="task-time">{time_range}</div>'
+                f'<div class="task-type">{ttype}</div>'
+                f'</div>'
+            )
+
+        html.append("</div>")  # day-column
+
+    html.append("</div>")  # days-container
+    html.append("</div>")  # schedule-body
+    html.append("</div>")  # schedule-wrapper
+
+    st.markdown("\n".join(html), unsafe_allow_html=True)
+
+    # Legend (still for priorities – applies mainly to tasks)
+    st.markdown(
+        """
     <div class="priority-legend">
         <span style="color: #aaa; font-weight: 600; margin-right: 10px;">Priority:</span>
         <div class="legend-item">
             <div class="legend-color" style="background-color: #f44336;"></div>
-            <span>High</span>
+            <span>High (tasks)</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background-color: #ff9800;"></div>
-            <span>Medium</span>
+            <span>Medium (tasks)</span>
         </div>
         <div class="legend-item">
             <div class="legend-color" style="background-color: #4caf50;"></div>
-            <span>Low</span>
+            <span>Low (tasks)</span>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 # =========================

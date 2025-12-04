@@ -1,6 +1,8 @@
 import os
 import re
-from typing import List, Dict, Optional
+import json
+from datetime import datetime, time as dt_time
+from typing import List, Dict, Optional, Any
 from collections import defaultdict
 import statistics
 
@@ -610,7 +612,165 @@ def ingest_documents(uploaded_files) -> int:
     global _vectordb_cache
     _vectordb_cache = vectordb
 
+    print("Extracting schedule blocks for scheduler...")
+    schedule_blocks = extract_schedule_blocks()
+    
+    if schedule_blocks:
+        save_schedule_blocks(schedule_blocks)
+        num_days = len(schedule_blocks)
+        total_blocks = sum(len(blocks) for blocks in schedule_blocks.values())
+        print(f"✓ Extracted {total_blocks} schedule blocks across {num_days} days")
+    else:
+        print("No schedule blocks found in uploaded documents")
+    
     return len(all_docs)
+
+# ==========
+# Extracting Schedule Blocks
+# ==========
+
+SCHEDULE_BLOCKS_FILE = os.path.join(DATA_DIR, "schedule_blocks.json")
+
+def extract_schedule_blocks() -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Extract all blocked time slots from ingested schedules.
+    Returns a dictionary mapping day names to lists of blocked time blocks.
+    
+    Format:
+    {
+        "monday": [
+            {
+                "start_time": "10:00",
+                "end_time": "12:29",
+                "course": "HOM 250",
+                "location": "AKSOB 1407"
+            },
+            ...
+        ],
+        ...
+    }
+    """
+    vectordb = _load_vector_store()
+    if vectordb is None:
+        return {}
+    
+    # Search for all schedule entries
+    try:
+        docs = vectordb.similarity_search(
+            "weekly schedule classes courses",
+            k=50  # Get many results to capture all schedule entries
+        )
+        
+        # Filter for schedule entries
+        schedule_entries = [
+            d for d in docs 
+            if d.metadata.get("type") in ["schedule_entry", "syllabus_schedule_entry"]
+        ]
+        
+        if not schedule_entries:
+            return {}
+        
+        # Organize by day
+        schedule_blocks = {day: [] for day in DAY_NAMES}
+        
+        for entry in schedule_entries:
+            day = entry.metadata.get("day")
+            time_str = entry.metadata.get("time", "")
+            course = entry.metadata.get("course", "Class")
+            location = entry.metadata.get("location", "")
+            
+            if not day or not time_str:
+                continue
+            
+            # Parse time string (format: "10:00-12:29" or "8:00 AM - 8:50 AM")
+            time_str = time_str.replace(" ", "")
+            
+            # Handle different time formats
+            if "-" in time_str or "–" in time_str:
+                separator = "-" if "-" in time_str else "–"
+                parts = time_str.split(separator)
+                
+                if len(parts) == 2:
+                    start = parts[0].strip()
+                    end = parts[1].strip()
+                    
+                    # Remove AM/PM if present and convert to 24-hour format
+                    start = _convert_to_24h(start)
+                    end = _convert_to_24h(end)
+                    
+                    if start and end:
+                        schedule_blocks[day].append({
+                            "start_time": start,
+                            "end_time": end,
+                            "course": course,
+                            "location": location
+                        })
+        
+        # Remove empty days
+        schedule_blocks = {day: blocks for day, blocks in schedule_blocks.items() if blocks}
+        
+        return schedule_blocks
+        
+    except Exception as e:
+        print(f"Error extracting schedule blocks: {e}")
+        return {}
+
+def _convert_to_24h(time_str: str) -> Optional[str]:
+    """Convert time string to 24-hour format HH:MM"""
+    time_str = time_str.strip().upper()
+    
+    # Already in 24-hour format (10:00, 14:30)
+    if "AM" not in time_str and "PM" not in time_str:
+        # Validate format
+        try:
+            parts = time_str.split(":")
+            if len(parts) == 2:
+                hour = int(parts[0])
+                minute = int(parts[1])
+                if 0 <= hour < 24 and 0 <= minute < 60:
+                    return f"{hour:02d}:{minute:02d}"
+        except:
+            pass
+        return None
+    
+    # Convert from 12-hour to 24-hour
+    try:
+        is_pm = "PM" in time_str
+        time_str = time_str.replace("AM", "").replace("PM", "").strip()
+        parts = time_str.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        
+        if is_pm and hour != 12:
+            hour += 12
+        elif not is_pm and hour == 12:
+            hour = 0
+        
+        return f"{hour:02d}:{minute:02d}"
+    except:
+        return None
+
+
+def save_schedule_blocks(schedule_blocks: Dict[str, List[Dict[str, Any]]]) -> None:
+    """Save schedule blocks to JSON file."""
+    try:
+        with open(SCHEDULE_BLOCKS_FILE, 'w') as f:
+            json.dump(schedule_blocks, f, indent=2)
+        print(f"Saved schedule blocks to {SCHEDULE_BLOCKS_FILE}")
+    except Exception as e:
+        print(f"Error saving schedule blocks: {e}")
+
+
+def load_schedule_blocks() -> Dict[str, List[Dict[str, Any]]]:
+    """Load schedule blocks from JSON file."""
+    try:
+        if os.path.exists(SCHEDULE_BLOCKS_FILE):
+            with open(SCHEDULE_BLOCKS_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading schedule blocks: {e}")
+    return {}
+
 
 
 # ==========

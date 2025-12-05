@@ -21,6 +21,7 @@ chromadb
 # PDF & DOCX ingestion
 pypdf
 python-docx
+pymupdf
 
 # Text splitting
 langchain-text-splitters

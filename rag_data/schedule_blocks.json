@@ -1,6 +1,18 @@
 {
   "monday": [
     {
+      "start_time": "09:00",
+      "end_time": "09:50",
+      "course": "COE 414",
+      "location": "Location not specified in syllabus"
+    },
+    {
+      "start_time": "08:00",
+      "end_time": "08:50",
+      "course": "COE 414",
+      "location": "Location not specified in syllabus"
+    },
+    {
       "start_time": "14:00",
       "end_time": "14:50",
       "course": "QBA 201",
@@ -29,6 +41,18 @@
   ],
   "wednesday": [
     {
+      "start_time": "09:00",
+      "end_time": "09:50",
+      "course": "COE 414",
+      "location": "Location not specified in syllabus"
+    },
+    {
+      "start_time": "08:00",
+      "end_time": "08:50",
+      "course": "COE 414",
+      "location": "Location not specified in syllabus"
+    },
+    {
       "start_time": "14:00",
       "end_time": "14:50",
       "course": "QBA 201",
@@ -56,6 +80,18 @@
     }
   ],
   "friday": [
+    {
+      "start_time": "09:00",
+      "end_time": "09:50",
+      "course": "COE 414",
+      "location": "Location not specified in syllabus"
+    },
+    {
+      "start_time": "08:00",
+      "end_time": "08:50",
+      "course": "COE 414",
+      "location": "Location not specified in syllabus"
+    },
     {
       "start_time": "14:00",
       "end_time": "14:50",

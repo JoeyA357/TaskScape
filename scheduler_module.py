@@ -443,7 +443,65 @@ def build_schedule(
 
     return schedule
 
-
+def check_time_conflict(
+    day_key: str,
+    new_start: time,
+    new_end: time,
+    schedule_data: Dict[str, Any],
+    exclude_block_idx: int
+) -> Optional[Dict[str, str]]:
+    """
+    Check if a new time slot conflicts with existing blocks on the same day.
+    
+    Args:
+        day_key: The date key (YYYY-MM-DD format)
+        new_start: New start time
+        new_end: New end time
+        schedule_data: The full schedule dictionary
+        exclude_block_idx: Index of the block being edited (to exclude from conflict check)
+    
+    Returns:
+        Dict with conflicting block info if conflict exists, None otherwise
+    """
+    if "days" not in schedule_data or day_key not in schedule_data["days"]:
+        return None
+    
+    new_start_min = time_to_minutes(new_start)
+    new_end_min = time_to_minutes(new_end)
+    
+    blocks = schedule_data["days"][day_key]
+    
+    for idx, block in enumerate(blocks):
+        # Skip the block being edited
+        if idx == exclude_block_idx:
+            continue
+        
+        # Get block start and end times
+        block_start = block.get("start_time")
+        block_end = block.get("end_time")
+        
+        # Parse if they're strings
+        if isinstance(block_start, str):
+            block_start = parse_time_str(block_start)
+        if isinstance(block_end, str):
+            block_end = parse_time_str(block_end)
+        
+        if not block_start or not block_end:
+            continue
+        
+        block_start_min = time_to_minutes(block_start)
+        block_end_min = time_to_minutes(block_end)
+        
+        # Check for overlap
+        # Overlap exists if: new_start < block_end AND new_end > block_start
+        if new_start_min < block_end_min and new_end_min > block_start_min:
+            return {
+                "task": block.get("task", "Unknown"),
+                "time": block.get("time", ""),
+                "type": block.get("type", "")
+            }
+    
+    return None
 
 
 def time_to_minutes_helper(t: time) -> int:

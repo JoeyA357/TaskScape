@@ -9,7 +9,7 @@ load_dotenv() # to load key
 # Optional: once teammates create these files, you can uncomment the imports.
 # For now, we keep them commented so the UI runs with placeholders.
 
-from scheduler_module import build_schedule          # SCHEDULER TEAM
+from scheduler_module import build_schedule, check_time_conflict          # SCHEDULER TEAM
 from rag_module import ingest_documents, answer_question  # RAG TEAM
 from location_module import (
     suggest_places_for_task,
@@ -133,6 +133,8 @@ def render_planner_tab():
         if not st.session_state.tasks:
             st.info("No tasks yet. Add one on the left.")
         else:
+            tasks_to_remove = []
+            
             for i, task in enumerate(st.session_state.tasks):
                 with st.expander(f"{task['title']}  ({task['priority']})", expanded=False):
                     st.markdown(f"**Type:** {task['task_type']}")
@@ -152,12 +154,33 @@ def render_planner_tab():
                             value=task["completed"],
                             key=f"completed_{task['id']}",
                         )
+                        
+                        # Mark for deletion if newly completed
+                        if new_completed and not task["completed"]:
+                            tasks_to_remove.append(i)
+                        
                         task["completed"] = new_completed
 
                     with cols[1]:
                         if st.button("Delete", key=f"delete_{task['id']}"):
                             st.session_state.tasks.pop(i)
                             st.rerun()
+            
+            # Remove completed tasks
+            if tasks_to_remove:
+                for idx in sorted(tasks_to_remove, reverse=True):
+                    task_title = st.session_state.tasks[idx]["title"]
+                    st.session_state.tasks.pop(idx)
+                    
+                    # Also remove from schedule if it exists
+                    if st.session_state.schedule and "days" in st.session_state.schedule:
+                        for day_key, blocks in st.session_state.schedule["days"].items():
+                            st.session_state.schedule["days"][day_key] = [
+                                b for b in blocks if b.get("task") != task_title
+                            ]
+                
+                st.success("✅ Completed task(s) removed!")
+                st.rerun()
 
     st.markdown("---")
 
@@ -209,11 +232,14 @@ def render_planner_tab():
                     st.error(f"Error generating schedule: {str(e)}")
 
     if st.session_state.schedule:
-        # Show info about blocked times if used
         if st.session_state.schedule.get("using_blocked_times"):
             st.info("📚 This schedule avoids your class times. Tasks are placed in free time slots.")
         
         render_schedule_view(st.session_state.schedule)
+        
+        # Add editable task timings section
+        st.markdown("---")
+        render_editable_task_timings()
     else:
         st.info("No schedule yet. Click **Generate / Update Schedule** to create one.")
 
@@ -557,6 +583,172 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
         unsafe_allow_html=True,
     )
 
+def render_editable_task_timings():
+    """Allow users to edit task timings and days in the generated schedule."""
+    st.subheader("✏️ Edit Task Timings & Days")
+    st.markdown("Adjust the timing and day of scheduled tasks below. Changes are validated against class times.")
+    
+    if "days" not in st.session_state.schedule:
+        return
+    
+    # Collect all task blocks (not classes)
+    task_blocks = []
+    for day_key, blocks in st.session_state.schedule["days"].items():
+        for idx, block in enumerate(blocks):
+            if block.get("type") != "Class":
+                task_blocks.append({
+                    "day_key": day_key,
+                    "block_idx": idx,
+                    "block": block
+                })
+    
+    if not task_blocks:
+        st.info("No tasks in schedule to edit.")
+        return
+    
+    # Get week start for day selection
+    week_start = datetime.datetime.strptime(
+        st.session_state.schedule.get("week_start", str(datetime.date.today())),
+        "%Y-%m-%d"
+    ).date()
+    
+    # Create list of days in the week
+    week_days = []
+    for i in range(7):
+        day = week_start + datetime.timedelta(days=i)
+        week_days.append((str(day), day.strftime("%A, %m/%d")))
+    
+    # Display each task with edit controls
+    for i, task_info in enumerate(task_blocks):
+        day_key = task_info["day_key"]
+        block_idx = task_info["block_idx"]
+        block = task_info["block"]
+        
+        # Parse current times
+        current_time_str = block.get("time", "")
+        task_name = block.get("task", "Task")
+        task_type = block.get("type", "")
+        priority = block.get("priority", "Medium")
+        
+        # Format day nicely
+        day_date = datetime.datetime.strptime(day_key, "%Y-%m-%d").date()
+        day_name = day_date.strftime("%A, %m/%d")
+        
+        with st.expander(f"📝 {task_name} - {day_name} ({current_time_str})", expanded=False):
+            st.markdown(f"**Task:** {task_name}")
+            st.markdown(f"**Type:** {task_type} | **Priority:** {priority}")
+            st.markdown(f"**Current schedule:** {day_name} at {current_time_str}")
+            
+            st.markdown("---")
+            
+            # Parse current start and end times
+            try:
+                start_str, end_str = current_time_str.split("-")
+                current_start = datetime.datetime.strptime(start_str.strip(), "%H:%M").time()
+                current_end = datetime.datetime.strptime(end_str.strip(), "%H:%M").time()
+            except:
+                current_start = datetime.time(9, 0)
+                current_end = datetime.time(10, 0)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Day selector
+                current_day_idx = [d[0] for d in week_days].index(day_key)
+                new_day_key = st.selectbox(
+                    "Select day",
+                    options=[d[0] for d in week_days],
+                    format_func=lambda x: dict(week_days)[x],
+                    index=current_day_idx,
+                    key=f"edit_day_{day_key}_{block_idx}_{i}"
+                )
+            
+            with col2:
+                st.markdown("<br>", unsafe_allow_html=True)  # spacing
+                day_changed = new_day_key != day_key
+                if day_changed:
+                    st.info(f"→ Moving to {dict(week_days)[new_day_key]}")
+            
+            col3, col4 = st.columns(2)
+            
+            with col3:
+                new_start = st.time_input(
+                    "Start time",
+                    value=current_start,
+                    key=f"edit_start_{day_key}_{block_idx}_{i}"
+                )
+            
+            with col4:
+                new_end = st.time_input(
+                    "End time",
+                    value=current_end,
+                    key=f"edit_end_{day_key}_{block_idx}_{i}"
+                )
+            
+            col5, col6 = st.columns([1, 3])
+            
+            with col5:
+                if st.button("✅ Apply Changes", key=f"apply_{day_key}_{block_idx}_{i}", use_container_width=True):
+                    # Validate new time
+                    if new_start >= new_end:
+                        st.error("❌ Start time must be before end time!")
+                    else:
+                        # Check for conflicts on the new day
+                        # If day changed, exclude_idx should be None; otherwise use block_idx
+                        exclude_idx = None if day_changed else block_idx
+                        
+                        conflict = check_time_conflict(
+                            day_key=new_day_key,
+                            new_start=new_start,
+                            new_end=new_end,
+                            schedule_data=st.session_state.schedule,
+                            exclude_block_idx=exclude_idx
+                        )
+                        
+                        if conflict:
+                            conflict_type = "blocked time" if conflict["type"] == "Class" else "task"
+                            st.error(f"🚫 **Time conflict with {conflict_type}: '{conflict['task']}'** ({conflict['time']})  \nPlease adjust the time again.")
+                        else:
+                            # Calculate new duration
+                            duration_min = int((datetime.datetime.combine(datetime.date.today(), new_end) - 
+                                              datetime.datetime.combine(datetime.date.today(), new_start)).total_seconds() / 60)
+                            
+                            # Create updated block
+                            updated_block = block.copy()
+                            updated_block.update({
+                                "time": f"{new_start.strftime('%H:%M')}-{new_end.strftime('%H:%M')}",
+                                "start_time": new_start,
+                                "end_time": new_end,
+                                "duration_min": duration_min
+                            })
+                            
+                            if day_changed:
+                                # Remove from old day
+                                st.session_state.schedule["days"][day_key].pop(block_idx)
+                                
+                                # Add to new day
+                                if new_day_key not in st.session_state.schedule["days"]:
+                                    st.session_state.schedule["days"][new_day_key] = []
+                                st.session_state.schedule["days"][new_day_key].append(updated_block)
+                                
+                                # Sort new day by start time
+                                st.session_state.schedule["days"][new_day_key].sort(
+                                    key=lambda b: b["start_time"] if isinstance(b["start_time"], datetime.time) else datetime.time(0, 0)
+                                )
+                                
+                                st.success(f"✅ Moved {task_name} to {dict(week_days)[new_day_key]} at {new_start.strftime('%H:%M')}-{new_end.strftime('%H:%M')}")
+                            else:
+                                # Update in same day
+                                st.session_state.schedule["days"][day_key][block_idx] = updated_block
+                                st.success(f"✅ Updated {task_name} to {new_start.strftime('%H:%M')}-{new_end.strftime('%H:%M')}")
+                            
+                            st.rerun()
+            
+            with col6:
+                if st.button("🗑️ Remove from Schedule", key=f"remove_{day_key}_{block_idx}_{i}", use_container_width=True):
+                    st.session_state.schedule["days"][day_key].pop(block_idx)
+                    st.success(f"✅ Removed {task_name} from schedule")
+                    st.rerun()
 
 # =========================
 # Docs & RAG Tab

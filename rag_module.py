@@ -12,30 +12,17 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 
-# Layout parser for PDFs
 try:
-    import fitz  # PyMuPDF
+    import fitz  
 except ImportError:
     fitz = None
-
-# ==========
-# Paths
-# ==========
 
 DATA_DIR = "rag_data"
 CHROMA_DIR = os.path.join(DATA_DIR, "chroma_db")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# ==========
-# Models
-# ==========
-
 CHAT_MODEL_NAME = "models/gemini-2.5-pro"
 EMBEDDING_MODEL_NAME = "models/text-embedding-004"
-
-# ==========
-# System prompt
-# ==========
 
 SYSTEM_PROMPT = (
     "You are TaskScapeAI, an assistant that answers questions ONLY\n"
@@ -56,10 +43,6 @@ SYSTEM_PROMPT = (
     "10) Whenever possible, quote the exact lines or phrases from the document chunks that support your answer.\n"
 
 )
-
-# ==========
-# Google GenAI helpers
-# ==========
 
 
 def _configure_google() -> None:
@@ -105,9 +88,6 @@ def get_llm():
     return chat
 
 
-# ==========
-# Regex helpers
-# ==========
 
 COURSE_RE = re.compile(r"^[A-Z]{3}\s+\d{3}[A-Z]?$")
 TIME_RE = re.compile(r"^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}$")
@@ -133,27 +113,9 @@ DAY_MAP = {
     "U": "sunday",
 }
 
-# ==========
-# Column text parser (course / time / location)
-# ==========
 
 
 def _parse_schedule_column_text(col_text: str) -> List[Dict[str, str]]:
-    """
-    Parse a single day column's text into course/time/location entries.
-
-    Expected pattern per column:
-
-        HOM 250
-        10:00-12:29
-        AKSOB 1407
-        QBA 201
-        14:00-14:50
-        AKSOB 1007
-        ...
-
-    We walk line by line and build [course, time, location] groups.
-    """
     lines = [l.strip() for l in col_text.splitlines() if l.strip()]
     entries: List[Dict[str, str]] = []
     i = 0
@@ -165,13 +127,11 @@ def _parse_schedule_column_text(col_text: str) -> List[Dict[str, str]]:
             course = line
             i += 1
 
-            # time
             time_str = None
             if i < len(lines) and TIME_RE.match(lines[i]):
                 time_str = lines[i]
                 i += 1
 
-            # location
             location = None
             if pending_loc:
                 location = pending_loc
@@ -189,7 +149,6 @@ def _parse_schedule_column_text(col_text: str) -> List[Dict[str, str]]:
                 }
             )
         else:
-            # line might be an extra location
             if LOCATION_RE.match(line):
                 pending_loc = line
             i += 1
@@ -197,9 +156,7 @@ def _parse_schedule_column_text(col_text: str) -> List[Dict[str, str]]:
     return entries
 
 
-# ==========
-# Schedule PDF parsing (word-level + row clustering)
-# ==========
+
 
 
 def parse_schedule_pdf(path: str) -> Dict[str, List[Dict[str, str]]]:
@@ -212,11 +169,6 @@ def parse_schedule_pdf(path: str) -> Dict[str, List[Dict[str, str]]]:
     3) For each day, cluster words into rows by y, build text lines,
        and run _parse_schedule_column_text on those lines.
 
-    This has been tested on Schedule_Luigi1.pdf and returns:
-
-    - monday / wednesday: HOM 250, QBA 201, HOM 324
-    - tuesday / thursday: ENG 102, LAS 202H
-    - friday: HOM 239, HOM 215, QBA 201, HOM 324
     """
     if fitz is None:
         return {}
@@ -227,10 +179,8 @@ def parse_schedule_pdf(path: str) -> Dict[str, List[Dict[str, str]]]:
 
     page = doc[0]
 
-    # words: (x0, y0, x1, y1, text, block_no, line_no, word_no)
     words = page.get_text("words")
 
-    # 1) Header positions
     header_x: Dict[str, float] = {}
     for x0, y0, x1, y1, text, block_no, line_no, word_no in words:
         token = text.strip(",: ").lower()
@@ -250,7 +200,6 @@ def parse_schedule_pdf(path: str) -> Dict[str, List[Dict[str, str]]]:
                 best_day = day
         return best_day or "monday"
 
-    # 2) Assign each non-header word to nearest day, skip time column on left (x0<80)
     day_words: Dict[str, List[tuple]] = defaultdict(list)
 
     for x0, y0, x1, y1, text, block_no, line_no, word_no in words:
@@ -259,10 +208,8 @@ def parse_schedule_pdf(path: str) -> Dict[str, List[Dict[str, str]]]:
             continue
 
         token = raw.strip(",: ").lower()
-        # skip day headers
         if token in DAY_NAMES:
             continue
-        # skip left time column (08:00, 09:00, etc.)
         if x0 < 80:
             continue
 
@@ -270,17 +217,14 @@ def parse_schedule_pdf(path: str) -> Dict[str, List[Dict[str, str]]]:
         day = nearest_day(x_center)
         day_words[day].append((x0, y0, raw))
 
-    # 3) For each day, cluster words by row (y) and build lines
     schedule: Dict[str, List[Dict[str, str]]] = {}
 
     for day, wlist in day_words.items():
         rows: Dict[int, List[tuple]] = defaultdict(list)
         for x0, y0, raw in wlist:
-            # group y into bins; 10 works well for this PDF
             key = round(y0 / 10) * 10
             rows[key].append((x0, raw))
 
-        # build lines in vertical order, words sorted by x
         lines: List[str] = []
         for y in sorted(rows.keys()):
             line_text = " ".join(
@@ -295,10 +239,6 @@ def parse_schedule_pdf(path: str) -> Dict[str, List[Dict[str, str]]]:
 
     return schedule
 
-
-# ==========
-# Syllabus schedule parsing
-# ==========
 
 
 def extract_syllabus_schedule(text: str, filename: str) -> List[Document]:
@@ -377,10 +317,6 @@ def extract_syllabus_schedule(text: str, filename: str) -> List[Document]:
     return docs
 
 
-# ==========
-# Loading & splitting docs
-# ==========
-
 
 def is_schedule_file(filename: str) -> bool:
     name = filename.lower()
@@ -414,7 +350,6 @@ def load_file_to_docs(uploaded_file) -> List[Document]:
 
     extra_docs: List[Document] = []
 
-    # Schedule PDF
     if is_schedule_file(filename):
         schedule = parse_schedule_pdf(path)
         if schedule:
@@ -466,7 +401,6 @@ def load_file_to_docs(uploaded_file) -> List[Document]:
                         )
                     )
 
-    # Syllabus schedule info
     syllabus_docs = extract_syllabus_schedule(all_text, filename)
     extra_docs.extend(syllabus_docs)
 
@@ -500,9 +434,7 @@ def split_documents(
     return split_docs
 
 
-# ==========
-# Vector store helpers
-# ==========
+
 
 _vectordb_cache: Optional[Chroma] = None
 
@@ -566,9 +498,6 @@ def _load_vector_store() -> Optional[Chroma]:
     return _vectordb_cache
 
 
-# ==========
-# Ingest
-# ==========
 
 
 def ingest_documents(uploaded_files) -> int:
@@ -625,9 +554,6 @@ def ingest_documents(uploaded_files) -> int:
     
     return len(all_docs)
 
-# ==========
-# Extracting Schedule Blocks
-# ==========
 
 SCHEDULE_BLOCKS_FILE = os.path.join(DATA_DIR, "schedule_blocks.json")
 
@@ -654,14 +580,12 @@ def extract_schedule_blocks() -> Dict[str, List[Dict[str, Any]]]:
     if vectordb is None:
         return {}
     
-    # Search for all schedule entries
     try:
         docs = vectordb.similarity_search(
             "weekly schedule classes courses",
-            k=50  # Get many results to capture all schedule entries
+            k=50  
         )
         
-        # Filter for schedule entries
         schedule_entries = [
             d for d in docs 
             if d.metadata.get("type") in ["schedule_entry", "syllabus_schedule_entry"]
@@ -670,7 +594,6 @@ def extract_schedule_blocks() -> Dict[str, List[Dict[str, Any]]]:
         if not schedule_entries:
             return {}
         
-        # Organize by day
         schedule_blocks = {day: [] for day in DAY_NAMES}
         
         for entry in schedule_entries:
@@ -682,10 +605,8 @@ def extract_schedule_blocks() -> Dict[str, List[Dict[str, Any]]]:
             if not day or not time_str:
                 continue
             
-            # Parse time string (format: "10:00-12:29" or "8:00 AM - 8:50 AM")
             time_str = time_str.replace(" ", "")
             
-            # Handle different time formats
             if "-" in time_str or "–" in time_str:
                 separator = "-" if "-" in time_str else "–"
                 parts = time_str.split(separator)
@@ -694,7 +615,6 @@ def extract_schedule_blocks() -> Dict[str, List[Dict[str, Any]]]:
                     start = parts[0].strip()
                     end = parts[1].strip()
                     
-                    # Remove AM/PM if present and convert to 24-hour format
                     start = _convert_to_24h(start)
                     end = _convert_to_24h(end)
                     
@@ -706,7 +626,6 @@ def extract_schedule_blocks() -> Dict[str, List[Dict[str, Any]]]:
                             "location": location
                         })
         
-        # Remove empty days
         schedule_blocks = {day: blocks for day, blocks in schedule_blocks.items() if blocks}
         
         return schedule_blocks
@@ -719,9 +638,7 @@ def _convert_to_24h(time_str: str) -> Optional[str]:
     """Convert time string to 24-hour format HH:MM"""
     time_str = time_str.strip().upper()
     
-    # Already in 24-hour format (10:00, 14:30)
     if "AM" not in time_str and "PM" not in time_str:
-        # Validate format
         try:
             parts = time_str.split(":")
             if len(parts) == 2:
@@ -733,7 +650,6 @@ def _convert_to_24h(time_str: str) -> Optional[str]:
             pass
         return None
     
-    # Convert from 12-hour to 24-hour
     try:
         is_pm = "PM" in time_str
         time_str = time_str.replace("AM", "").replace("PM", "").strip()
@@ -770,12 +686,6 @@ def load_schedule_blocks() -> Dict[str, List[Dict[str, Any]]]:
     except Exception as e:
         print(f"Error loading schedule blocks: {e}")
     return {}
-
-
-
-# ==========
-# Answering
-# ==========
 
 
 def _extract_day_from_query(query: str) -> Optional[str]:

@@ -1,11 +1,8 @@
-# scheduler_module.py - COMPLETE REPLACEMENT
-
 from datetime import time, date, datetime, timedelta
 from typing import List, Dict, Any, Tuple, Optional
 import json
 import os
 
-# Path to schedule blocks file (created by RAG)
 DATA_DIR = "rag_data"
 SCHEDULE_BLOCKS_FILE = os.path.join(DATA_DIR, "schedule_blocks.json")
 
@@ -60,18 +57,14 @@ def find_free_windows(
     """
     day_name = get_day_name(day_date)
     
-    # Get blocked slots for this day
     blocks = blocked_times.get(day_name, [])
     
     if not blocks:
-        # Entire day is free
         return [(day_start, day_end)]
     
-    # Convert everything to minutes
     day_start_min = time_to_minutes(day_start)
     day_end_min = time_to_minutes(day_end)
     
-    # Parse and sort blocked times
     blocked_intervals = []
     for block in blocks:
         start_time = parse_time_str(block["start_time"])
@@ -83,24 +76,19 @@ def find_free_windows(
                 time_to_minutes(end_time)
             ))
     
-    # Sort by start time
     blocked_intervals.sort()
     
-    # Find gaps between blocked times
     free_windows = []
     current_time = day_start_min
     
     for block_start, block_end in blocked_intervals:
-        # If there's a gap before this block
         if current_time < block_start:
             free_windows.append((
                 minutes_to_time(current_time),
                 minutes_to_time(block_start)
             ))
-        # Move past this block
         current_time = max(current_time, block_end)
     
-    # Check if there's time after the last block
     if current_time < day_end_min:
         free_windows.append((
             minutes_to_time(current_time),
@@ -128,13 +116,11 @@ def find_free_windows_for_day_blocks(
     if not day_blocks:
         return [(day_start, day_end)]
 
-    # Build occupied intervals in minutes
     intervals: List[Tuple[int, int]] = []
     for block in day_blocks:
         s = block.get("start_time")
         e = block.get("end_time")
 
-        # If for some reason these are strings, parse them
         if isinstance(s, str):
             s = parse_time_str(s)
         if isinstance(e, str):
@@ -153,7 +139,6 @@ def find_free_windows_for_day_blocks(
     if not intervals:
         return [(day_start, day_end)]
 
-    # Merge intervals and find gaps
     intervals.sort()
     free_windows: List[Tuple[time, time]] = []
     current = day_start_min
@@ -217,29 +202,23 @@ def build_schedule(
       - Distributes workload across days instead of packing everything on Monday.
     """
 
-    # -------------------------
-    # 0) Load blocked (class) times
-    # -------------------------
+
     blocked_times: Dict[str, List[Dict[str, Any]]] = {}
     if use_blocked_times:
         blocked_times = load_blocked_times()
         if not blocked_times:
             print("Warning: use_blocked_times=True but no blocked times found")
 
-    # -------------------------
-    # 1) Enrich tasks with deadline & priority
-    # -------------------------
+  
     def priority_value(p: Optional[str]) -> int:
         return {"High": 0, "Medium": 1, "Low": 2}.get(p, 2)
 
     def parse_deadline(d: Optional[str]) -> date:
-        # If no deadline, assume 7 days from today
         if not d:
             return date.today() + timedelta(days=7)
         try:
             return datetime.strptime(d, "%Y-%m-%d").date()
         except Exception:
-            # Fallback: treat as 7 days from today if parsing fails
             return date.today() + timedelta(days=7)
 
     enriched_tasks: List[Dict[str, Any]] = []
@@ -254,14 +233,11 @@ def build_schedule(
             }
         )
 
-    # Sort by: earlier deadline → higher priority → shorter duration
     enriched_tasks.sort(
         key=lambda t: (t["deadline_date"], t["priority_rank"], t["duration_min"])
     )
 
-    # -------------------------
-    # 2) Week range (Monday–Sunday of current week)
-    # -------------------------
+
     today = date.today()
     week_start = today - timedelta(days=today.weekday())  # Monday
     week_end = week_start + timedelta(days=6)
@@ -273,16 +249,12 @@ def build_schedule(
         "using_blocked_times": use_blocked_times,
     }
 
-    # Minutes per day in working window
     workday_total_min = time_to_minutes(day_end) - time_to_minutes(day_start)
 
-    # Track load per day
     class_minutes_by_date: Dict[str, int] = {}
     task_minutes_by_date: Dict[str, int] = {}
 
-    # -------------------------
-    # 3) Initialise days + add CLASS blocks
-    # -------------------------
+
     for i in range(7):
         day = week_start + timedelta(days=i)
         day_key = str(day)
@@ -291,14 +263,13 @@ def build_schedule(
         task_minutes_by_date[day_key] = 0
 
         if use_blocked_times and blocked_times:
-            day_name = get_day_name(day)  # "monday", ...
+            day_name = get_day_name(day)  
             for block in blocked_times.get(day_name, []):
                 s = parse_time_str(block["start_time"])
                 e = parse_time_str(block["end_time"])
                 if not s or not e:
                     continue
 
-                # Clip to working hours
                 if s < day_start:
                     s = day_start
                 if e > day_end:
@@ -318,18 +289,14 @@ def build_schedule(
                         "start_time": s,
                         "end_time": e,
                         "duration_min": dur,
-                        "priority": "High",  # show as 'High' in legend (red)
+                        "priority": "High",
                     }
                 )
 
-        # keep class blocks sorted by start_time
         schedule["days"][day_key].sort(
             key=lambda b: time_to_minutes(b["start_time"])
         )
 
-    # -------------------------
-    # 4) Place tasks (respect deadlines & spread load)
-    # -------------------------
     for t in enriched_tasks:
         duration = int(t["duration_min"])
         if duration <= 0:
@@ -337,28 +304,22 @@ def build_schedule(
 
         deadline = t["deadline_date"]
 
-        # Clamp deadline into the current week for scheduling
         effective_deadline = min(max(deadline, week_start), week_end)
 
-        # Candidate days: from week_start to effective_deadline (inclusive)
-                # Candidate days: from week_start to effective_deadline (inclusive)
-                # Candidate days: from week_start to effective_deadline (inclusive)
+
         days_range: List[date] = []
         d = week_start
         while d <= effective_deadline:
             days_range.append(d)
             d += timedelta(days=1)
 
-        # If deadline is before week_start, fall back to whole week
         if not days_range:
             d = week_start
             while d <= week_end:
                 days_range.append(d)
                 d += timedelta(days=1)
 
-        # ---- Prefer earlier days before the deadline, but still consider load ----
-        # Margin: how many days *before* the deadline we try to finish if possible.
-        # If deadline is far from week_start -> use 2 days margin, otherwise 1 or 0.
+
         diff_days = (effective_deadline - week_start).days
         if diff_days >= 3:
             margin = 2
@@ -369,12 +330,9 @@ def build_schedule(
 
         early_deadline = effective_deadline - timedelta(days=margin)
 
-        # Early days: "safe zone" before the margin
         early_days = [d for d in days_range if d <= early_deadline]
-        # Late days: very close to the deadline
         late_days = [d for d in days_range if d > early_deadline]
 
-        # Load now counts classes fully (they do make you tired)
         def day_load(day_date: date) -> float:
             dk = str(day_date)
             return task_minutes_by_date.get(dk, 0) + class_minutes_by_date.get(dk, 0)
@@ -382,7 +340,6 @@ def build_schedule(
         early_days.sort(key=day_load)
         late_days.sort(key=day_load)
 
-        # We will try early_days first, then late_days
         candidate_days = early_days + late_days
 
 
@@ -393,7 +350,6 @@ def build_schedule(
             day_key = str(day_date)
             day_blocks = schedule["days"].get(day_key, [])
 
-            # If the day is already very packed (>70% of work window), skip it
             total_busy_min = (
                 class_minutes_by_date.get(day_key, 0)
                 + task_minutes_by_date.get(day_key, 0)
@@ -426,7 +382,6 @@ def build_schedule(
                     }
                 )
 
-                # Keep blocks sorted
                 schedule["days"][day_key].sort(
                     key=lambda b: time_to_minutes(b["start_time"])
                 )
@@ -438,8 +393,7 @@ def build_schedule(
             if scheduled:
                 break
 
-        # If not scheduled before deadline, we currently leave it unscheduled.
-        # You could add a second pass here to place it after the deadline if you prefer.
+        
 
     return schedule
 
@@ -472,15 +426,12 @@ def check_time_conflict(
     blocks = schedule_data["days"][day_key]
     
     for idx, block in enumerate(blocks):
-        # Skip the block being edited
         if idx == exclude_block_idx:
             continue
         
-        # Get block start and end times
         block_start = block.get("start_time")
         block_end = block.get("end_time")
         
-        # Parse if they're strings
         if isinstance(block_start, str):
             block_start = parse_time_str(block_start)
         if isinstance(block_end, str):
@@ -491,9 +442,7 @@ def check_time_conflict(
         
         block_start_min = time_to_minutes(block_start)
         block_end_min = time_to_minutes(block_end)
-        
-        # Check for overlap
-        # Overlap exists if: new_start < block_end AND new_end > block_start
+
         if new_start_min < block_end_min and new_end_min > block_start_min:
             return {
                 "task": block.get("task", "Unknown"),

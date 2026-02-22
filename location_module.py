@@ -1,4 +1,3 @@
-# location_module.py
 
 from typing import Dict, Any, List, Tuple
 import os
@@ -6,13 +5,10 @@ import requests
 from math import radians, sin, cos, sqrt, atan2
 
 
-# =============================
-# Helpers
-# =============================
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Compute distance between two lat/lon points in kilometers."""
-    R = 6371.0  # Earth radius in km
+    R = 6371.0  
 
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
@@ -51,10 +47,8 @@ def _geocode_location(user_location: str) -> Tuple[float, float]:
                 loc = results[0]["geometry"]["location"]
                 return float(loc["lat"]), float(loc["lng"])
         except Exception:
-            # If Google fails for any reason, we fall through to Nominatim
             pass
 
-    # Fallback: Nominatim (not strictly necessary now, but nice as backup)
     def _nominatim_query(q: str):
         url = "https://nominatim.openstreetmap.org/search"
         params = {
@@ -69,14 +63,12 @@ def _geocode_location(user_location: str) -> Tuple[float, float]:
         resp.raise_for_status()
         return resp.json()
 
-    # Try as-is
     results = _nominatim_query(user_location)
     if results:
         lat = float(results[0]["lat"])
         lon = float(results[0]["lon"])
         return lat, lon
 
-    # Try with ", Lebanon"
     results = _nominatim_query(user_location + ", Lebanon")
     if results:
         lat = float(results[0]["lat"])
@@ -96,11 +88,7 @@ def _infer_place_profiles_for_task(task: Dict[str, Any]) -> List[Dict[str, Any]]
     ttype = (task.get("task_type") or "").lower()
     prefer_outside = bool(task.get("prefer_outside", False))
 
-    # Google place types we care about:
-    # - "library"
-    # - "cafe"
-    # - "university"
-    # there's no official "coworking_space" type, so we use a keyword.
+
     if ttype in ["study", "project"]:
         if prefer_outside:
             return [
@@ -119,7 +107,6 @@ def _infer_place_profiles_for_task(task: Dict[str, Any]) -> List[Dict[str, Any]]
             {"type": "restaurant", "keyword": "coffee"},
         ]
     else:
-        # Admin / Other → generic places to sit and work
         return [
             {"type": "cafe", "keyword": None},
             {"type": "library", "keyword": None},
@@ -157,7 +144,6 @@ def _google_places_nearby(
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            # If this particular call fails, skip it
             all_results.append(
                 {
                     "error": f"Google Places error for profile {prof}: {e}"
@@ -167,7 +153,6 @@ def _google_places_nearby(
 
         status = data.get("status", "")
         if status not in ["OK", "ZERO_RESULTS"]:
-            # Could be OVER_QUERY_LIMIT, REQUEST_DENIED, etc.
             all_results.append(
                 {
                     "error": f"Google Places status={status} for profile {prof}"
@@ -182,7 +167,6 @@ def _google_places_nearby(
             seen_place_ids.add(place_id)
             all_results.append(result)
 
-    # Filter out pure error records
     return [r for r in all_results if "error" not in r]
 
 
@@ -242,9 +226,6 @@ def _google_elements_to_places(
     return results[:8]
 
 
-# =============================
-# Public Tool Functions
-# =============================
 
 def suggest_places_for_task_with_coords(
     task: Dict[str, Any],

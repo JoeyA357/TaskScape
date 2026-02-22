@@ -3,24 +3,17 @@ from typing import List, Dict, Any, Optional
 
 import streamlit as st
 from dotenv import load_dotenv
-load_dotenv() # to load key 
+load_dotenv() 
 
 
-# Optional: once teammates create these files, you can uncomment the imports.
-# For now, we keep them commented so the UI runs with placeholders.
-
-from scheduler_module import build_schedule, check_time_conflict          # SCHEDULER TEAM
-from rag_module import ingest_documents, answer_question  # RAG TEAM
+from scheduler_module import build_schedule, check_time_conflict          
+from rag_module import ingest_documents, answer_question 
 from location_module import (
     suggest_places_for_task,
     suggest_places_for_task_with_coords,
-)  # LOCATION TEAM
+)  
 from streamlit_geolocation import streamlit_geolocation
 
-
-# =========================
-# Session State Utilities
-# =========================
 
 def init_session_state():
     """Initialize all keys used in st.session_state."""
@@ -39,9 +32,6 @@ def init_session_state():
     if "current_lon" not in st.session_state:
         st.session_state.current_lon = None
 
-# =========================
-# Sidebar: Global Settings
-# =========================
 
 def render_sidebar():
     st.sidebar.title("TaskScapeAI 🧭")
@@ -70,16 +60,11 @@ def render_sidebar():
     )
 
 
-# =========================
-# Planner / Scheduler Tab
-# =========================
-
 def render_planner_tab():
     st.header("📅 Planner & Tasks")
 
     col_form, col_tasks = st.columns([1, 1])
 
-    # ---- Add Task Form ----
     with col_form:
         st.subheader("Add a Task")
 
@@ -126,7 +111,6 @@ def render_planner_tab():
                 )
                 st.success(f"Task '{title}' added.")
 
-    # ---- Task List ----
     with col_tasks:
         st.subheader("Tasks")
 
@@ -155,7 +139,6 @@ def render_planner_tab():
                             key=f"completed_{task['id']}",
                         )
                         
-                        # Mark for deletion if newly completed
                         if new_completed and not task["completed"]:
                             tasks_to_remove.append(i)
                         
@@ -166,13 +149,11 @@ def render_planner_tab():
                             st.session_state.tasks.pop(i)
                             st.rerun()
             
-            # Remove completed tasks
             if tasks_to_remove:
                 for idx in sorted(tasks_to_remove, reverse=True):
                     task_title = st.session_state.tasks[idx]["title"]
                     st.session_state.tasks.pop(idx)
                     
-                    # Also remove from schedule if it exists
                     if st.session_state.schedule and "days" in st.session_state.schedule:
                         for day_key, blocks in st.session_state.schedule["days"].items():
                             st.session_state.schedule["days"][day_key] = [
@@ -184,16 +165,13 @@ def render_planner_tab():
 
     st.markdown("---")
 
-    # ---- Schedule Section (Full Width Below) ----
     st.subheader("Schedule")
     st.markdown("This will show your generated schedule using the **Scheduler module**.")
 
-    # Check if blocked times are available
     import os
     schedule_blocks_file = os.path.join("rag_data", "schedule_blocks.json")
     has_blocked_times = os.path.exists(schedule_blocks_file)
     
-    # Create columns for button and checkbox
     col_btn, col_check = st.columns([2, 2])
     
     with col_check:
@@ -237,7 +215,6 @@ def render_planner_tab():
         
         render_schedule_view(st.session_state.schedule)
         
-        # Add editable task timings section
         st.markdown("---")
         render_editable_task_timings()
     else:
@@ -260,34 +237,30 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
         st.info("No schedule data available.")
         return
 
-    # Week start
     week_start = datetime.datetime.strptime(
         schedule_data.get("week_start", str(datetime.date.today())),
         "%Y-%m-%d",
     ).date()
 
-    # Time range (08:00–20:00 like before)
     DAY_START_HOUR = 8
     DAY_END_HOUR = 20
     slot_labels = [f"{h:02d}:00" for h in range(DAY_START_HOUR, DAY_END_HOUR + 1)]
-    SLOT_HEIGHT_PX = 60  # visual height per hour
+    SLOT_HEIGHT_PX = 60  
 
-    # Monday–Saturday
     days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
-    # ----- Build course → color mapping for CLASS blocks -----
-    # Light colors, no strong red/yellow/orange
+  
     course_palette = [
-        "#dcefff",  # light blue
-        "#ffcfef",  # light pink
-        "#dbc7ff",  # light purple
-        "#b2f2d5",  # light cyan
-        "#fbccc5",  # indigo-ish
-        "#d5dfb6",  # teal-ish
-        "#c19cc8",  # soft lavender
-        "#f3e5f5",  # very light purple
-        "#dcf5ff",  # icy blue
-        "#c4f8ff",  # aqua
+        "#dcefff",  
+        "#ffcfef",  
+        "#dbc7ff",  
+        "#b2f2d5",  
+        "#fbccc5",  
+        "#d5dfb6",  
+        "#c19cc8",  
+        "#f3e5f5",  
+        "#dcf5ff",  
+        "#c4f8ff",  
     ]
 
     class_courses = []
@@ -320,7 +293,6 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
     day_start_min = DAY_START_HOUR * 60
     day_end_min = DAY_END_HOUR * 60
 
-    # ---------- CSS ----------
     st.markdown(
         f"""
     <style>
@@ -474,10 +446,8 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
         unsafe_allow_html=True,
     )
 
-    # ---------- Build HTML ----------
     html = ['<div class="schedule-wrapper">']
 
-    # Header row
     html.append('<div class="schedule-header-row">')
     html.append('<div class="schedule-header-cell">Time</div>')
     for i, day in enumerate(days_of_week):
@@ -486,18 +456,14 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
             f'<div class="schedule-header-cell">{day}'
             f'<small>{day_date.strftime("%m/%d")}</small></div>'
         )
-    html.append("</div>")  # header-row
+    html.append("</div>")  
 
-    # Body: time column + day columns
     html.append('<div class="schedule-body">')
 
-    # Time column
     html.append('<div class="time-column">')
-    for label in slot_labels[:-1]:  # labels for 08:00..19:00 rows
+    for label in slot_labels[:-1]:  
         html.append(f'<div class="time-slot-label">{label}</div>')
-    html.append("</div>")  # time-column
-
-    # Day columns container
+    html.append("</div>")  
     html.append('<div class="days-container">')
 
     for i in range(6):
@@ -511,7 +477,6 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
             s = _to_time(block.get("start_time"))
             e = _to_time(block.get("end_time"))
             if not s or not e:
-                # fallback from "time" string
                 try:
                     start_str, end_str = block["time"].split("-")
                     s = datetime.datetime.strptime(start_str.strip(), "%H:%M").time()
@@ -524,10 +489,9 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
             if end_min <= start_min:
                 continue
 
-            # Map to pixels
             top_px = (start_min - day_start_min) / 60 * SLOT_HEIGHT_PX
             height_px = max(
-                SLOT_HEIGHT_PX,  # minimum height = 1 full hour slot
+                SLOT_HEIGHT_PX, 
                 (end_min - start_min) / 60 * SLOT_HEIGHT_PX,
             )
 
@@ -536,10 +500,8 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
             time_range = block.get("time", "")
             ttype = block.get("type", "")
 
-            # Default style uses priority-based colors
             style = f"top:{top_px:.1f}px;height:{height_px:.1f}px;"
 
-            # Override colors for CLASS blocks with a per-course color
             if ttype == "Class":
                 course_color = course_colors.get(title, "#e3f2fd")
                 style += f"background-color:{course_color};border-left-color:{course_color};"
@@ -553,15 +515,14 @@ def render_schedule_view(schedule_data: Dict[str, Any]):
                 f'</div>'
             )
 
-        html.append("</div>")  # day-column
+        html.append("</div>")  
 
-    html.append("</div>")  # days-container
-    html.append("</div>")  # schedule-body
-    html.append("</div>")  # schedule-wrapper
+    html.append("</div>")  
+    html.append("</div>")  
+    html.append("</div>")  
 
     st.markdown("\n".join(html), unsafe_allow_html=True)
 
-    # Legend (still for priorities – applies mainly to tasks)
     st.markdown(
         """
     <div class="priority-legend">
@@ -591,7 +552,6 @@ def render_editable_task_timings():
     if "days" not in st.session_state.schedule:
         return
     
-    # Collect all task blocks (not classes)
     task_blocks = []
     for day_key, blocks in st.session_state.schedule["days"].items():
         for idx, block in enumerate(blocks):
@@ -606,31 +566,26 @@ def render_editable_task_timings():
         st.info("No tasks in schedule to edit.")
         return
     
-    # Get week start for day selection
     week_start = datetime.datetime.strptime(
         st.session_state.schedule.get("week_start", str(datetime.date.today())),
         "%Y-%m-%d"
     ).date()
     
-    # Create list of days in the week
     week_days = []
     for i in range(7):
         day = week_start + datetime.timedelta(days=i)
         week_days.append((str(day), day.strftime("%A, %m/%d")))
     
-    # Display each task with edit controls
     for i, task_info in enumerate(task_blocks):
         day_key = task_info["day_key"]
         block_idx = task_info["block_idx"]
         block = task_info["block"]
         
-        # Parse current times
         current_time_str = block.get("time", "")
         task_name = block.get("task", "Task")
         task_type = block.get("type", "")
         priority = block.get("priority", "Medium")
         
-        # Format day nicely
         day_date = datetime.datetime.strptime(day_key, "%Y-%m-%d").date()
         day_name = day_date.strftime("%A, %m/%d")
         
@@ -641,7 +596,6 @@ def render_editable_task_timings():
             
             st.markdown("---")
             
-            # Parse current start and end times
             try:
                 start_str, end_str = current_time_str.split("-")
                 current_start = datetime.datetime.strptime(start_str.strip(), "%H:%M").time()
@@ -653,7 +607,6 @@ def render_editable_task_timings():
             col1, col2 = st.columns(2)
             
             with col1:
-                # Day selector
                 current_day_idx = [d[0] for d in week_days].index(day_key)
                 new_day_key = st.selectbox(
                     "Select day",
@@ -664,7 +617,7 @@ def render_editable_task_timings():
                 )
             
             with col2:
-                st.markdown("<br>", unsafe_allow_html=True)  # spacing
+                st.markdown("<br>", unsafe_allow_html=True)  
                 day_changed = new_day_key != day_key
                 if day_changed:
                     st.info(f"→ Moving to {dict(week_days)[new_day_key]}")
@@ -689,12 +642,9 @@ def render_editable_task_timings():
             
             with col5:
                 if st.button("✅ Apply Changes", key=f"apply_{day_key}_{block_idx}_{i}", use_container_width=True):
-                    # Validate new time
                     if new_start >= new_end:
                         st.error("❌ Start time must be before end time!")
                     else:
-                        # Check for conflicts on the new day
-                        # If day changed, exclude_idx should be None; otherwise use block_idx
                         exclude_idx = None if day_changed else block_idx
                         
                         conflict = check_time_conflict(
@@ -709,11 +659,9 @@ def render_editable_task_timings():
                             conflict_type = "blocked time" if conflict["type"] == "Class" else "task"
                             st.error(f"🚫 **Time conflict with {conflict_type}: '{conflict['task']}'** ({conflict['time']})  \nPlease adjust the time again.")
                         else:
-                            # Calculate new duration
                             duration_min = int((datetime.datetime.combine(datetime.date.today(), new_end) - 
                                               datetime.datetime.combine(datetime.date.today(), new_start)).total_seconds() / 60)
                             
-                            # Create updated block
                             updated_block = block.copy()
                             updated_block.update({
                                 "time": f"{new_start.strftime('%H:%M')}-{new_end.strftime('%H:%M')}",
@@ -723,22 +671,18 @@ def render_editable_task_timings():
                             })
                             
                             if day_changed:
-                                # Remove from old day
                                 st.session_state.schedule["days"][day_key].pop(block_idx)
                                 
-                                # Add to new day
                                 if new_day_key not in st.session_state.schedule["days"]:
                                     st.session_state.schedule["days"][new_day_key] = []
                                 st.session_state.schedule["days"][new_day_key].append(updated_block)
                                 
-                                # Sort new day by start time
                                 st.session_state.schedule["days"][new_day_key].sort(
                                     key=lambda b: b["start_time"] if isinstance(b["start_time"], datetime.time) else datetime.time(0, 0)
                                 )
                                 
                                 st.success(f"✅ Moved {task_name} to {dict(week_days)[new_day_key]} at {new_start.strftime('%H:%M')}-{new_end.strftime('%H:%M')}")
                             else:
-                                # Update in same day
                                 st.session_state.schedule["days"][day_key][block_idx] = updated_block
                                 st.success(f"✅ Updated {task_name} to {new_start.strftime('%H:%M')}-{new_end.strftime('%H:%M')}")
                             
@@ -750,9 +694,6 @@ def render_editable_task_timings():
                     st.success(f"✅ Removed {task_name} from schedule")
                     st.rerun()
 
-# =========================
-# Docs & RAG Tab
-# =========================
 
 def render_docs_rag_tab():
     st.header("📄 Docs & RAG (Schedules, Syllabi, etc.)")
@@ -808,9 +749,6 @@ def render_docs_rag_tab():
 
 
 
-# =========================
-# Locations / Study Places Tab
-# =========================
 def find_task_by_title(title: str) -> Optional[Dict[str, Any]]:
     """Find a task in the task list by its title."""
     for t in st.session_state.tasks:
@@ -826,7 +764,6 @@ def render_locations_tab():
         "to complete certain tasks, based on your location and task type."
     )
 
-    # --------- User Location & Radius ---------
     st.subheader("Your Location")
 
     col_geo, col_loc, col_radius = st.columns([1, 2, 1])
@@ -900,7 +837,6 @@ def render_location_mode_specific_task():
             st.warning("Please share your location (button) or type a city/area above.")
             return
 
-        # Typed location has priority over GPS
         if has_text_loc:
             places = suggest_places_for_task(
                 task=selected_task,
@@ -1014,9 +950,6 @@ def show_places_list(places: List[Dict[str, Any]]):
         )
 
 
-# =========================
-# Main App
-# =========================
 
 def main():
     st.set_page_config(
